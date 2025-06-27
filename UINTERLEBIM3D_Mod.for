@@ -2,8 +2,8 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 C                                                           C
 C          SUBROUTINE  LEBIM with AMA                       C 
 C          Authors:    Mar Munoz Reja           
-C                                                           C
-C          University Seville, Spain,  Agoust  2024         C
+C                      Jose Pimentel                        C
+C          University of Seville, Spain,  June  2025        C
 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
  
 
@@ -34,10 +34,10 @@ c
       real*8 GiT,GiiT,GiiiT,GiE,GiiE,GiiiE,t,taun,tc,tauc,sigmac
       real*8 Knn,Ktt1,Ktt2, GIct,GIIct,GIIIct, Nini
       real*8 KnnE,KttE1,KttE2,signoN
-	integer k,j,i,nprops,node
-	integer kstep,kinc,nstatv,damage
-	real*8 sse,spd,scd,rpl,drpldt,dtime,temp,dtemp,celent,pnewdt
-	character*200 fullname
+      integer k,j,i,nprops,node
+      integer kstep,kinc,nstatv,damage
+      real*8 sse,spd,scd,rpl,drpldt,dtime,temp,dtemp,celent,pnewdt
+      character*200 fullname
       
 C      real*8 DDS(ndir,ndir), psig,lambda,GIcb, Cets, Lets, Le
 C      real*8 sigmacb,Pi,Gi,Gii,Gtot,ktkn,Gc,psiGcrit, mu,GcE
@@ -158,7 +158,7 @@ c     calculo de energia del criterio tensional
       GiiiT=(STRESS(3))**2.d0/(2.d0*Ktt2)
 c     calculo de energia del criterio energetico 
 C     en comparacion con la UMAT aqui el RDISP es desplazamiento relativo
-c     al final de a iteración
+c     al final de a iteraciÃ³n
       GiE=Knn*((RDISP(1))**2.d0)/(2.d0)
       GiiE=Ktt1*((RDISP(2))**2.d0)/(2.d0)
       GiiiE=Ktt2*((RDISP(3))**2.d0)/(2.d0)
