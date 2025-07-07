@@ -2,8 +2,8 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 C                                                           C
 C          SUBROUTINE  LEBIM with AMA                       C 
 C          Authors:    Mar Munoz Reja           
-C                      Jose Pimentel                        C
-C          University of Seville, Spain,  June  2025        C
+C                      Jose M. Pimentel                     C
+C          University of Seville, Spain,   2025             C
 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
  
 
@@ -22,22 +22,21 @@ C
      $     TIME(2),PROPS(NPROPS),COORDS(MCRD),ALOCALDIR(MCRD,MCRD),
      $     DROT(2,2),AMKI(NDIR,NDIR),AMSKI(NDIR,NDIR)
       CHARACTER*80 CINAME,SLNAME,MSNAME
-      PARAMETER(TOLER=1.D-12, ZERO=0.D0, ONE=1.D0, TWO=2.D0,
-     $     HALF=ONE/TWO)
-c
+      PARAMETER (ONE=1.0d0, TWO=2.0d0, HALF=ONE/TWO,
+     &          h=0.05d0, ZERO=0.0d0, TOLER=1.D-12)
       INTEGER ND,PT,ELEM,NODEL,NODECT
       REAL*8 factor
       INTEGER error_ap,error_lec
       
       real*8 DDS(ndir,ndir),psig1,psig2,lambda1,lambda2, Cets, Lets, Le
-      real*8 Pi,psiGcrit1,psiGcrit2,mu,Gtot,GcT,GcE
+      real*8 PI,psiGcrit1,psiGcrit2,mu,Gtot,GcT,GcE
       real*8 GiT,GiiT,GiiiT,GiE,GiiE,GiiiE,t,taun,tc,tauc,sigmac
       real*8 Knn,Ktt1,Ktt2, GIct,GIIct,GIIIct, Nini
       real*8 KnnE,KttE1,KttE2,signoN
-      integer k,j,i,nprops,node
-      integer kstep,kinc,nstatv,damage
-      real*8 sse,spd,scd,rpl,drpldt,dtime,temp,dtemp,celent,pnewdt
-      character*200 fullname
+	integer k,j,i,nprops,node
+	integer kstep,kinc,nstatv,damage
+	real*8 sse,spd,scd,rpl,drpldt,dtime,temp,dtemp,celent,pnewdt
+	character*200 fullname
       
 C      real*8 DDS(ndir,ndir), psig,lambda,GIcb, Cets, Lets, Le
 C      real*8 sigmacb,Pi,Gi,Gii,Gtot,ktkn,Gc,psiGcrit, mu,GcE
@@ -74,7 +73,7 @@ c      !READ THE MATERIAL PROPERTIES FROM THE INPUT FILE
       Nini = PROPS(8)
 !      Le = PROPS(11)     !solo se utiliza si querremos hacer una Interaccion Nodo-Super. Si la hacemos sup-sup no es necesario
 !cccccccccccccccccccccccccc inicializacion de variables para quitar basura:
-      Pi=ACOS(-1d0)
+      Pi=ACOS(-ONE)
       GiT=0.0d0
       GiiT=0.0d0
       GiiiT=0.0d0
@@ -90,7 +89,7 @@ c     damagemenosK debe ser NO reversible, por eso lo debemos guardar de un paso
 c     se actualiza al pricipio del AMA (j=1) para un paso k cualquiera, pero en el resto de pasos j no cambia
 c     solo pasa de un paso j a otro mediante la statev(13)   
 c     Y el damageT debe permanecer cte dentro de cada j, por eso se toma desde statev(11) que no cambia
-c     pero damageE si se actualiza en cada j, y se hace a traves de statev(11) que se decide al final de la UMAT
+c     pero damageE si se actualiza en cada j, y se hace a traves de statev(11) que se decide al final de la uinter
 C     Por eso se empieza a calcular con el damageE de la iteracion anterior, j-1    
       IF ((kinc*kstep).eq.1) THEN
           damage=0.00d0 
@@ -145,6 +144,11 @@ c     Calculo del vector STRESS en funcion de la matriz rigidez de la interfase
 c     sigma_nn:
       DO i=1,3
         STRESS(i)=DDSDDR(i,i)*(RDISP(i))
+C        IF (RDISP(1)<0.d0) THEN
+C            STRESS(1)=ABS(STRESS(1))
+C        ELSEIF (RDISP(1)>0.d0) THEN
+C            STRESS(1)=DDSDDR(1,1)*(-RDISP(1))
+C        ENDIF
       ENDDO
       taun=DSQRT(STRESS(2)**2+STRESS(3)**2)
 c     sigma_tt:
@@ -153,20 +157,28 @@ C      STRESS(3)=DDSDDR(3,3)*(RDISP(3))
  
 cccccccccccccccccccccccccc CALCULO de energias (tensional y energetica) para todos los nodos de las interfases       
 c     calculo de energia del criterio tensional
-      GiT=(STRESS(1))**2.d0/(2.d0*Knn)
+      IF (RDISP(1)<0.d0) THEN
+        GiT=(STRESS(1))**2.d0/(2.d0*Knn)
+      ELSE
+        GiT=0.d0
+      ENDIF
       GiiT=(STRESS(2))**2.d0/(2.d0*Ktt1)
       GiiiT=(STRESS(3))**2.d0/(2.d0*Ktt2)
 c     calculo de energia del criterio energetico 
 C     en comparacion con la UMAT aqui el RDISP es desplazamiento relativo
-c     al final de a iteraciÃ³n
-      GiE=Knn*((RDISP(1))**2.d0)/(2.d0)
+c     al final de a iteración
+      IF (RDISP(1)<0.d0) THEN
+        GiE=Knn*((RDISP(1))**2.d0)/(2.d0)
+      ELSE
+        GiE=0.d0
+      ENDIF
       GiiE=Ktt1*((RDISP(2))**2.d0)/(2.d0)
       GiiiE=Ktt2*((RDISP(3))**2.d0)/(2.d0)
       
 cccccccccccccccccccc     calculo de la energia critica en la primera iteracion para el CT y el CE     
       if (kinc.eq.1) then
 c     en la UINTER el desplazamiento de despegue es negativo y contacto positivo   
-        psig1=datan2(taun*dsqrt(Knn/Ktt1),-STRESS(1))
+        psig1=datan2(taun*dsqrt(Knn/Ktt1),ABS(STRESS(1)))
 C        psig2=datan2(STRESS(3)*dsqrt(Knn/Ktt2),-STRESS(1))
 	  psiGcrit1=pi/(2.d0*(1.d0-lambda1))
 C        psiGcrit2=pi/(2.d0*(1.d0-lambda2))
@@ -178,7 +190,7 @@ C        psiGcrit2=pi/(2.d0*(1.d0-lambda2))
         endif
 	  GcE=Gct*mu
 c     calculo de energia total en la primera iteracion para el CT y ese debe ser el mismo en tomo el AMA
-        IF (signoN.GT.0.D0)THEN
+        IF (signoN.GT.0.D0) THEN
             GtotT=GiT+GiiT+GiiiT
         ELSE
             GtotT=GiiT+GiiiT
@@ -208,7 +220,7 @@ C     critical strength:
       tc = DSQRT(sigmac**2.d0 + tauc**2.d0)
       
 c     calculo de energia total para cualquier iteracion para el CE con el dagno decidido al final de la ITR anterior	
-	IF (signoN.GT.0.D0)THEN
+	IF (signoN.GT.0.D0) THEN
             GtotE=GiE+GiiE+GiiiE
       ELSE
             GtotE=GiiE+GiiiE
@@ -220,13 +232,13 @@ c     aunque hayamos calculados todas las variables en cada PI, para
 c     el calculo del CT y CE unicamente se debe contar con los PI NO dagnados en los pasos anteriores
 c     por eso solo nos metemos en el bucle si damagemenosK=0
       IF (damagemenosK.le.1d-18) THEN !cumple irreversibilidad
-c     En el primer j, al final de la UMAT, se evalua el CT         
+c     En el primer j, al final de la uinter, se evalua el CT         
 c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo del CT 
       !si estamos al final en el primer incremento            
 	  if (kinc.eq.1) then
 	      NODECT=0
-	      if (t.GE.tc) then !cumple CT
-	      WRITE(*,*) t/tc 
+	      if (GtotT.GE.GcT) then !cumple CT
+C	      WRITE(*,*) t/tc 
 C	      CALL GETNORMAL('TOP_SURF',NODE,TIME(1),COORDS,NORMAL,STATUS)
 	          damageT=1.d0      !entonces el PI esta dagando por CT
 	          !inicio todo dagnado del CT     
@@ -246,13 +258,13 @@ c     al final de cualquier j diferente de 1, se evalua el damageE porque CT ya 
         end if !salimos de la evalucaion de damageT y del damageE
 
 c     Despues de hacer el CE se debe combinar con el CT
- 	  if ((abs(damageT).le.1d-18).or.(abs(damageE).le.1d-18)) then
+ 	  if ((abs(damageT).le.1d-18).OR.(abs(damageE).le.1d-18)) then
  	      damage=0.d0
- 	  else
- 	      damage=1.0
+ 	  elseif ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18)) THEN
+ 	      damage=1.0d0
         end if
       !el final del bucle de damagemenosK. Garantiza la irreversibilidad
-      ENDIF 
+      ENDIF
 
 C     fuera del bucle que garantiza la irreversibilidad preparamos la energia y energia citica por PI
 c     para calcular despues el funcional de energia en cada N. Para todos los PI de las interfases
@@ -289,10 +301,18 @@ c	salida de datos. Todos los datos han de ser utilizado con anterioridad
 	statev(10)=damageE
       statev(11)=damagemenosK
       statev(12)=area
-      statev(13)=STRESS(1)
+      IF (RDISP(1).GT.0.d0) THEN
+        statev(13)=-1.d0*STRESS(1)
+      ELSE
+        statev(13)=ABS(STRESS(1))
+      ENDIF
       statev(14)=STRESS(2)
       statev(15)=STRESS(3)
-      statev(16)=DSQRT(STRESS(1)**2 + STRESS(2)**2 + STRESS(3)**2)
+      statev(16)=taun
+      statev(17)=GiT
+      statev(18)=GiiT
+      statev(19)=GiiiT
+      statev(20)=RDISP(1)
 C	IF (KSTEP*KINC.EQ.KSTEP) then
 C	  CALL GETINTERNAL("TOP ARM-1", 7, 0, NODEL, JRCD)
 C	  WRITE INSTANCE NAME, LOCAL NODE NUMBER
