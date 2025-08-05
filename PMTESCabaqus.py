@@ -7,8 +7,12 @@
 #||||	 IMPORTACION DE MODULOS Y APERTURA DE ODB	||||		   
 #-------------------------------------------------------
 from os import chdir,path,mkdir
+import os
 from shutil import move, rmtree
+from abaqus import *
+from abaqusConstants import *
 from odbAccess import*
+import visualization
 #from sys import argv
 from  math import sqrt #para raiz cuadrada
 from string import replace
@@ -80,6 +84,7 @@ def PMTESCcriTen_carga(name_files,carga,cadenanombreSDV):
 # %%
 def PMTESCcritEneUMAT(name_files, control,cadenanombreSDV):
     odb = openOdb(name_files + '.odb')    
+    odbv = session.openOdb(name_files + '.odb')
     myAssembly = odb.rootAssembly
     #--------------------------------------------------------------------------
     #||||||||||||| DEFINICION DE CAMINOS DE VARIABLES EN ABAQUS         |||||||||||||||
@@ -129,8 +134,127 @@ def PMTESCcritEneUMAT(name_files, control,cadenanombreSDV):
         eneHtotal = eneDefSolidos+sumaenerinter-Work
     else:
         eneHtotal = eneDefSolidos+sumaenerinter
-#    
+#
+    import displayGroupOdbToolset as dgo
+    # Get the viewport
+    viewport = session.viewports[session.currentViewportName]
+    viewport.setValues(displayedObject=odbv)
+    session.viewports['Viewport: 1'].view.setValues(session.views['Front'])
+    session.viewports['Viewport: 1'].odbDisplay.display.setValues(plotState=(
+        CONTOURS_ON_DEF, ))
+    session.viewports['Viewport: 1'].odbDisplay.commonOptions.setValues(
+        deformationScaling=UNIFORM, uniformScaleFactor=1)
+    session.viewports['Viewport: 1'].odbDisplay.setPrimaryVariable(
+        variableLabel='SDV1     ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF', 
+        outputPosition=NODAL, )
+    session.viewports['Viewport: 1'].odbDisplay.setPrimaryVariable(
+        variableLabel='SDV10    ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF', 
+        outputPosition=NODAL, )
+    leaf = dgo.LeafFromPartInstance(partInstanceName=('BOTTOM ARM-1', ))
+    session.viewports['Viewport: 1'].odbDisplay.displayGroup.remove(leaf=leaf)
+    session.viewports['Viewport: 1'].view.setProjection(projection=PARALLEL)
+    session.viewports['Viewport: 1'].view.setValues(session.views['Bottom'])
+    session.viewports['Viewport: 1'].viewportAnnotationOptions.setValues(
+        compass=OFF)
+    session.viewports['Viewport: 1'].odbDisplay.contourOptions.setValues(
+        numIntervals=2, maxValue=0, minValue=0)
+    session.viewports['Viewport: 1'].view.setValues(nearPlane=493.329, 
+        farPlane=508.291, width=71.6097, height=24.2584, cameraPosition=(
+        219.901, -499.005, 5.99311), cameraTarget=(219.901, 1.80515, 5.99311))
+    session.pngOptions.setValues(imageSize=(1600, 712))
+    session.printOptions.setValues(vpDecorations=OFF, vpBackground=ON)
+    session.printToFile(
+        fileName=str(name_files)+'.png', 
+        format=PNG, canvasObjects=(session.viewports['Viewport: 1'], ))
     odb.close()
     return eneHtotal,sumaenerinter,NeL2damageK,NeL2damagetotal,dcbtf2_field
 #
-#    
+def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
+    os.chdir(workdir)
+    odb = openOdb(name_files + '.odb')
+    odbv = session.openOdb(name_files + '.odb')
+    myAssembly = odb.rootAssembly
+    #--------------------------------------------------------------------------
+    #||||||||||||| DEFINICION DE CAMINOS DE VARIABLES EN ABAQUS         |||||||||||||||
+    #--------------------------------------------------------------------------  
+    key_step = odb.steps.keys()
+    lastFrame = odb.steps[key_step[0]].frames[-1]
+    #InterElementSet = odb.rootAssembly.elementSets[Eset]    
+    #path_despl=odb.steps[key_step[0]].frames[-1].fieldOutputs['U'].\
+    #    getSubset(region=InterNodeSet).values
+    path_SDV1=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV1     '+cadenanombreSDV].values
+    path_SDV7=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV7     '+cadenanombreSDV].values  
+    path_SDV8=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV8     '+cadenanombreSDV].values 
+    path_SDV11=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV11    '+cadenanombreSDV].values
+    path_SDV12=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV12    '+cadenanombreSDV].values
+    # concentrated force extraction:
+    dcbtoparm = odb.rootAssembly.nodeSets['TOPRP']
+    tf_field=lastFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+    dcbtf2_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
+    
+    #para sacar la energia	
+    key_HisReg = odb.steps[key_step[0]].historyRegions.keys()
+    path_HisRegEne = odb.steps[key_step[0]].historyRegions[key_HisReg[0]]
+    
+    sumaenerinter=0.00
+    NeL2damagetotal=[]
+    NeL2damageK=[]
+    for k in range(len(path_SDV1)):
+        damage=path_SDV1[k].data
+        NeG=path_SDV1[k].nodeLabel
+        damageKmenos1=path_SDV11[k].data
+        GtotE=path_SDV7[k].data
+        GcE=path_SDV8[k].data
+        areacontacto=path_SDV12[k].data
+        sumaenerinter=sumaenerinter+GtotE*areacontacto+GcE*areacontacto
+        if damage==1.0:
+            NeL2damagetotal.append(NeG)
+            if damageKmenos1==0.0:          
+                NeL2damageK.append(NeG)
+    
+    #--------------------------------------------------------------------------
+    #Energia de todo el sistema en el setp=j
+    Work = 2*(path_HisRegEne.historyOutputs['ALLWK'].data[-1][1])
+    eneDefSolidos = path_HisRegEne.historyOutputs['ALLSE'].data[-1][1]
+    #tomamos 'ALLSE' en lugar de 'ALLIE' porque estrictamente es la energia de deformacion
+    #pero podemos replantearnos poner la otra por el hourglassing
+    if control==1:
+        eneHtotal = eneDefSolidos+sumaenerinter-Work
+    else:
+        eneHtotal = eneDefSolidos+sumaenerinter
+#   
+    import displayGroupOdbToolset as dgo
+    # Get the viewport
+    viewport = session.viewports[session.currentViewportName]
+    viewport.setValues(displayedObject=odbv)
+    session.viewports['Viewport: 1'].view.setValues(session.views['Front'])
+    session.viewports['Viewport: 1'].odbDisplay.display.setValues(plotState=(
+        CONTOURS_ON_DEF, ))
+    session.viewports['Viewport: 1'].odbDisplay.commonOptions.setValues(
+        deformationScaling=UNIFORM, uniformScaleFactor=1)
+    session.viewports['Viewport: 1'].odbDisplay.setPrimaryVariable(
+        variableLabel='SDV1     ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF', 
+        outputPosition=NODAL, )
+    session.viewports['Viewport: 1'].odbDisplay.setPrimaryVariable(
+        variableLabel='SDV10    ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF', 
+        outputPosition=NODAL, )
+    leaf = dgo.LeafFromPartInstance(partInstanceName=('BOTTOM ARM-1', ))
+    session.viewports['Viewport: 1'].odbDisplay.displayGroup.remove(leaf=leaf)
+    session.viewports['Viewport: 1'].view.setProjection(projection=PARALLEL)
+    session.viewports['Viewport: 1'].view.setValues(session.views['Bottom'])
+    session.viewports['Viewport: 1'].viewportAnnotationOptions.setValues(
+        compass=OFF)
+    session.viewports['Viewport: 1'].odbDisplay.contourOptions.setValues(
+        numIntervals=2, maxValue=0, minValue=0)
+    session.viewports['Viewport: 1'].view.setValues(nearPlane=493.329, 
+        farPlane=508.291, width=71.6097, height=24.2584, cameraPosition=(
+        219.901, -499.005, 5.99311), cameraTarget=(219.901, 1.80515, 5.99311))
+    session.pngOptions.setValues(imageSize=(1600, 712))
+    session.printOptions.setValues(vpDecorations=OFF, vpBackground=ON)
+    session.printToFile(
+        fileName=workdir+'/'+str(name_files)+'.png', 
+        format=PNG, canvasObjects=(session.viewports['Viewport: 1'], ))
+
+    odb.close()
+    return eneHtotal,sumaenerinter,NeL2damageK,NeL2damagetotal,dcbtf2_field
+   
