@@ -5,13 +5,71 @@ C          Authors:    Mar Munoz Reja
 C                      Jose M. Pimentel                     C
 C          University of Seville, Spain,   2025             C
 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+      MODULE random_r8
+        IMPLICIT NONE
+        PRIVATE ! Makes everything in the module private
+        PUBLIC :: r8_normal_01 ! Makes only this function public
+        
+        REAL(KIND=8), PARAMETER :: PI = ACOS(-1.0D0)
+      
+      CONTAINS
+      function r8_normal_01 ( )
+    !*****************************************************************************80
+    !
+    !! r8_normal_01() returns a unit pseudonormal R8.
+    !
+    !  Discussion:
+    !
+    !    The standard normal probability distribution function (PDF) has
+    !    mean 0 and standard deviation 1.
+    !
+    !  Licensing:
+    !
+    !    This code is distributed under the MIT license.
+    !
+    !  Modified:
+    !
+    !    06 August 2013
+    !
+    !  Author:
+    !
+    !    John Burkardt
+    !
+    !  Parameters:
+    !
+    !    Output, real ( kind = rk ) R8_NORMAL_01, a normally distributed
+    !    random value.
+    !
+          implicit none
+
+          integer, parameter :: rk = kind ( 1.0D+00 )
+
+          real ( kind = rk ) r1
+          real ( kind = rk ) r2
+          real ( kind = rk ) r8_normal_01
+          real ( kind = rk ), parameter :: r8_pi = ACOS(-1.0d0)
+          real ( kind = rk ) x
+
+          call random_number ( harvest = r1 )
+          call random_number ( harvest = r2 )
+          x = sqrt ( - 2.0D+00 * log ( r1 ) ) *
+     &        cos ( 2.0D+00 * r8_pi * r2 )
+
+          r8_normal_01 = x
+
+          return
+          end function r8_normal_01
+      !*****************************************************************************
+      END MODULE random_r8
+      
       SUBROUTINE UINTER(STRESS,DDSDDR,AMKI,AMSKI,FLUX,DDFDDT,DDSDDT,
      1     DDFDDR,STATEV,SED,SFD,SPD,SVD,SCD,PNEWDT,RDISP,DRDISP,
      2     TEMP,DTEMP,PREDEF,DPRED,TIME,DTIME,FREQR,CINAME,SLNAME,
      3     MSNAME,PROPS,COORDS,ALOCALDIR,DROT,AREA,CHRLNGTH,NODE,NDIR,
      4     NSTATV,NPRED,NPROPS,MCRD,KSTEP,KINC,KIT,LINPER,LOPENCLOSE,
      5     LSTATE,LSDI,LPRINT)
-C 
+C     
+      USE random_r8
       INCLUDE 'ABA_PARAM.INC'
 C 
       DIMENSION STRESS(NDIR),DDSDDR(NDIR,NDIR),FLUX(2),DDFDDT(2,2),
@@ -52,17 +110,17 @@ C --- Use a dynamically allocatable array to store failed node IDs
       INTEGER, SAVE :: numFailedNodes = 0
       INTEGER, SAVE :: capacity = 0
       LOGICAL :: isAlreadyFailed
+      INTEGER KINC_failn(50,2) !max of 50 KINC
       REAL*8 :: FAILED_DATA(MAX_FAILED,10), mint2tc, maxt2tc, mingte2gc,
-     &          maxgte2gc, deltagt2gc, tcrand, randr8, prand
+     &          maxgte2gc, deltagt2gc, tcrand, randr8, prand, randnr8
       LOGICAL :: CALLED
       REAL*8  :: TARGET_TIME, deltat2tc
       COMMON /FAILED_N/ FAILED_DATA, mint2tc, maxt2tc, deltat2tc, 
-     &        mingte2gc, maxgte2gc, deltagt2gc, tcrand
+     &        mingte2gc, maxgte2gc, deltagt2gc, tcrand, KINC_failn
 C      SAVE CALLED, TARGET_TIME
       DATA CALLED /.FALSE./
 C     END OF DATA DECLARATION BLOCK      
 C     ---------------------------------------------------------------
-
       ! Initialize on first call
       IF (INIT_FLAG .EQ. 0) THEN
           NODNUM = 0
@@ -104,7 +162,6 @@ c      !READ THE MATERIAL PROPERTIES FROM THE INPUT FILE
       lambda1 = PROPS(5) 
       !Lambda de HS. No se utililiza si tomamos el criterio cuadratico
       lambda2 = PROPS(6) 
-      
       mu = PROPS(7)
       Nini = PROPS(8)
       
@@ -167,6 +224,7 @@ c     Rigideces del resorte dependiendo del dagno. Si esta dagnado es cero.
       KttE1=Ktt1*funT
       KttE2=Ktt2*funT
       K_penalty = TWO*KnnE  ! x Knn (in consistent units)
+C     *****************************************************************      
       ! Check for penetration (negative gap = penetration)
 !      IF (RDISP(1).GT.ZERO) THEN
 !          penetration = RDISP(1) 
@@ -180,6 +238,7 @@ c     Rigideces del resorte dependiendo del dagno. Si esta dagnado es cero.
 !        ! Separation: apply full stiffness for numerical stability
 !          DDSDDR(1,1) = KnnE
 !      ENDIF
+C     *****************************************************************
 
 c	Actualizacion de la matriz rigidez de la interfase
 c     Esta matriz es la misma dentro de cada j, y dependera del dagno del j-1.
@@ -283,12 +342,12 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
 	      TARGET_TIME = TIME(1) + DTIME
 	      IF ((GtotT.GE.Gct)) THEN !cumple CT
 	      ! Use STATEV(21) as node counting flag
-!                  STATEV(21) = ONE   ! Mark as counted
-                  NODNUM = NODNUM + 1
-	          !WRITE(*,*) NODNUM, t/tc, COORDS(1)
-	          ! Store in array if space available
+!               STATEV(21) = ONE   ! Mark as counted
+                NODNUM = NODNUM + 1
+	          ! Store vars in array
 	          CALL RANDOM_SEED(NODNUM)
-	          CALL RANDOM_NUMBER(randr8)
+!	          CALL RANDOM_NUMBER(randr8)
+	          randnr8 = r8_normal_01( )
                 IF (NODNUM < MAX_FAILED) THEN
                   FAILED_DATA(NODNUM, 1) = INT(NODNUM)
                   FAILED_DATA(NODNUM, 2) = INT(NODE)
@@ -296,8 +355,9 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
                   FAILED_DATA(NODNUM, 4:6) = COORDS(1:3)
                   FAILED_DATA(NODNUM, 7) = GtotE
                   FAILED_DATA(NODNUM, 8) = GtotE/GcE
-                  FAILED_DATA(NODNUM, 9) = 1+(randr8*prand)
+                  FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
                   tcrand = tc*FAILED_DATA(NODNUM, 9)
+                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
                   FAILED_DATA(NODNUM, 10) = t/tcrand
                 ENDIF
 	          damageT=ONE !entonces el nodo esta dagando por CT
@@ -319,7 +379,7 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
      &              .and.abs(Nini-ONE).le.1d-18) THEN
                 damageE=ONE
 !                    if (NODE.EQ.FAILED_DATA(i,2)) then
-                write(*,*) NODE, t/tc, t/tcrand, NINT(damageE)
+!                write(*,*) NODE, t/tc, t/tcrand, NINT(damageE)
 !                    WRITE(*,*) int(FAILED_DATA(i,1)), 
 !     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
 
@@ -437,7 +497,7 @@ c       CC-FFM
 ! 	      WRITE(*,*) NODNUM, NODECC, KINC
         ENDIF
         
-C     KINC > 1 check ensures we don't run this on the very first increment
+!       KINC > 1 check ensures we don't run this on the very first increment
 !      IF ((NODECC.EQ.NODNUM).AND.(KINC.GT.1)) THEN
 !          WRITE(*,*) NODNUM, NODECC, KINC
 !          WRITE(*,*) 'UINTER: TERMINATION CONDITION MET. EXITING.'
@@ -500,6 +560,7 @@ c	salida de datos. Todos los datos han de ser utilizado con anterioridad
       statev(22)=NODECC
 !      NODECC=ZERO !initialize nodecc when KINC ends
 	RETURN
+	
 	CONTAINS
 	SUBROUTINE PROCESS_FAILED_DATA(FAILED_DATA, FAIL_COUNT, NCOLS)
           INTEGER, INTENT(INOUT) :: FAIL_COUNT
