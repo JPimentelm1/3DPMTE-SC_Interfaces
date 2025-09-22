@@ -6,15 +6,18 @@ Created on Mon Jul 10 15:12:59 2023
 """
 
 from os import chdir, path, mkdir, getcwd, remove
+import os
 from shutil import rmtree, move,copy
 from glob import glob
 from subprocess import call
+import subprocess
 import fileinput
 import sys
 import time
 import collections
 import pickle
 import numpy as np
+import shutil
 # Redirect stdout to the command prompt
 sys.stdout = sys.__stdout__
 import PMTESCabaqus
@@ -71,11 +74,11 @@ def mover_archivos(list_mover,folder):
         for k in range(len(files_move)):
             move(files_move[k],folder)
 
-def model_outputfile(sim_file,K,newload,TF,enerHtotalN1,sumaenerinterN1,lNeL2damageKN1,enerHtotalN2,sumaenerinterN2,lNeL2damageKN2,lNeL2damagetotal):
+def model_outputfile(sim_file,K,newload,TF,enerHtotalN1,sumaenerinterN1,lNeL2damageKN1,enerHtotalN2,sumaenerinterN2,lNeL2damageKN2,lNeL2damagetotal,energy_evol):
     outfile=open(sim_file,'a')
     outfile.write(str('%d\t %.8e\t %.8e\t %.8e\t %.8e\t %d\t'%(K,newload,TF,enerHtotalN1,sumaenerinterN1,lNeL2damageKN1)))
-    outfile.write(str('%.8e\t %.8e\t %d\t %d\t'%(enerHtotalN2,sumaenerinterN2,lNeL2damageKN2,lNeL2damagetotal))+'\n')
-    
+    outfile.write(str('%.8e\t %.8e\t %d\t %d\t'%(enerHtotalN2,sumaenerinterN2,lNeL2damageKN2,lNeL2damagetotal)))
+    outfile.write(str('%.10e\t %.10e\t %.10e\t'%(energy_evol[-1][-2],energy_evol[-1][-1],energy_evol[-1][-3]))+'\n')
     outfile.close()
 
 #%% datos de entrada
@@ -84,29 +87,28 @@ actual_directory = getcwd()
 #cambiar a actual_directory la siguiente linea si quiero correrlo en el actual
 working_directory=actual_directory
 start = time.time()
-list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
+list_delete = ('*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc')
 borrar_archivos(list_delete)
 
 # force (1) or displacement (0) control:
 control=0
 # initial load increment:
-incr=0
+incr=0.5
 factorcarga=1.0
 # initial load:
-cargainicial=1
+cargainicial=1.0
 pasosK=1
-nameinp='DCBuinter_m2'
-UINTER_lst=['UINTERLEBIM3D_Mod.for','UINTERLEBIM3D_BKMod.for']
+nameinp='DCBuinter_L237m1_40ebias'
+UINTER_lst=['UINTERLEBIM3D_kincxit.for','UINTERLEBIMAMA3D.for']
 nameUMAT=UINTER_lst[0]
 amplname='AMP-1'
 godb=1  #si quiero guardar todos los odb pongo 1, si no 0
 #definicion de mi uinter para cambiar
-cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=20, properties=8\n','\n']
-# cadenasUinterN1=['150.,  600.,  600.,  0.75,   0.25,  0.25, 8., 1.\n']  
-cadenasUinterN=[150.,  600.,  600., .75, .25, 8]
-cadenasUinterN1=['150.,  600.,  600.,  0.75,   0.25,  0.25, 8., 1.\n']    
-cadenasUinterN2=['150.,  600.,  600.,  0.75,   0.25,  0.25, 8., 2.\n']     
+cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=8\n','\n']
+cadenasUinterN=[300.,  600.,  600., .75, .25, .25, 8]
+cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+'\n']))]
+cadenasUinterN2=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(11)+'\n']))]
 cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
 # cadenanombreSDV='ASSEMBLY_VIGA_INF_SUPER_SUP/ASSEMBLY_VIGA_SUP_SUPER_INF'
 cadenanombreSDV='ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF'
@@ -139,10 +141,21 @@ replacement(nameodbcargainicial+'.inp', cadenasCohesivo[1], cadenasUinter[1])
 #reemplazamos la tercera linea en los dos archivos de inicio. Esta es distinta
 replacement(nameodbcargainicial+'.inp', cadenasCohesivo[2], cadenasUinterN1[0])
 #reemplazamos la linea que pide las salida de las superficies de contacto    
-cadenaFOcontact=lineasdefinteraccion(nameodbcargainicial+'.inp', 'CDISP, CSTRESS',1)  #buscamos la cadena a cambiar
+cadenaFOcontact=lineasdefinteraccion(nameodbcargainicial+'.inp', 'CDISP, CSTRESS,',1)  #buscamos la cadena a cambiar
 #cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
 replacement(nameodbcargainicial+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
 replacement(nameodbcargainicial+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+signalFile = 'exit_signal.txt'
+
+# --- Ensure the signal file does not exist before starting ---
+# This is crucial to avoid false positives from previous runs.
+try:
+    os.remove(signalFile)
+except OSError:
+    pass
+
+##importo inp y impongo nueva carga
+
 myJob = mdb.JobFromInputFile(name=nameodbcargainicial, 
         inputFileName=nameodbcargainicial, type=ANALYSIS, 
         atTime=None, waitMinutes=0, waitHours=0, queue=None,
@@ -151,13 +164,56 @@ myJob = mdb.JobFromInputFile(name=nameodbcargainicial,
         scratch=actual_directory, parallelizationMethodExplicit=DOMAIN, numDomains=cpus, 
         activateLoadBalancing=False, multiprocessingMode=DEFAULT, numCpus=cpus)
 
-myJob.submit(consistencyChecking=OFF)
-myJob.waitForCompletion()
+# myJob.submit(consistencyChecking=OFF)
+# myJob.waitForCompletion()
+# --- 1. SETUP ---
+jobName = myJob.name
+# The command to run Abaqus from the command line
+# 'interactive' tells Abaqus to run the job and then exit.
+command = 'abaqus job={} user={} interactive'.format(jobName,nameUMAT)
+try:
+    os.remove(signalFile)
+    # Also remove the Abaqus lock file if it exists
+    if os.path.exists('{}.lck'.format(jobName)):
+        os.remove('{}.lck'.format(jobName))
+except OSError:
+    pass # Ignore errors if files don't exist
+    
+# --- 2. LAUNCH ABAQUS (NON-BLOCKING) ---
+# subprocess.Popen launches the command in a new process
+# and the script immediately continues to the next line.
+process = subprocess.Popen(command, shell=True)
+
+
+print("--- Now entering monitoring loop... ---")
+
+# --- 3. MONITOR THE JOB (POLLING LOOP) ---
+# The 'process.poll()' method checks if the subprocess has terminated.
+# It returns 'None' if it's still running.
+while process.poll() is None:
+    "Waiting for '{}' to finish... (checking again in 10 seconds)".format(jobName)
+    # 'time.sleep()' makes the script pause, preventing it from
+    # using 100% CPU while it waits.
+    time.sleep(10)
+    
+"\n--- Abaqus job has finished ---"
+"--- The Abaqus process returned exit code: {} ---".format(process.returncode)
+
+# --- Check for the signal file after the job finishes ---
+if os.path.exists(signalFile):
+    with open(signalFile, 'r') as f:
+        content = f.read().strip()
+    print('Abaqus job terminated early by UINTER')
+    print('Signal received: ',content)
+    # Clean up the signal file
+    os.remove(signalFile)
+
+enerHtotalN1,sumaenerinterN1,NeL2damageKN1,NeL2damagetotalN1,tf,energy_evol=PMTESCabaqus.PMTESCcritEneUMAT(nameodbcargainicial,control,cadenanombreSDV)    
+
 ###obtener la nueva carga del odb
-# print(nameodbcargainicial, cargainicial, cadenanombreSDV)
 newload = PMTESCabaqus.PMTESCcriTen_carga(nameodbcargainicial, cargainicial, cadenanombreSDV)
-# How is the newload variable calculated?
-newload=newload*factorcarga 
+newload=(newload*factorcarga) + 0.25*(newload*factorcarga) + incr
+print('Applied load: ',newload)
 ###borrar archivos
 if godb==1:
     list_odbs=([nameodbcargainicial+'*.odb'])
@@ -167,10 +223,9 @@ list_delete = ([nameodbcargainicial+'.*'])
 #borrar_archivos(list_delete)
 ###preparamos nuestro inp k=1
 nameinpK=nameinp+str(1)
-copy(nameinp+'.inp',nameinpK+'.inp')
+shutil.copy(nameinp+'.inp',nameinpK+'.inp')
 
 ###importo inp y impongo nueva carga
-print(newload)
 mdb.ModelFromInputFile(inputFileName=nameinpK+'.inp', name=nameinpK)
 mdb.models[nameinpK].amplitudes[amplname].setValues(timeSpan=STEP, smooth=SOLVER_DEFAULT, data=((0.0, newload), (1.0, newload)))
 mdb.Job(name=nameinpK, model=nameinpK, description='', 
@@ -182,26 +237,46 @@ mdb.Job(name=nameinpK, model=nameinpK, description='',
             numGPUs=0)
 
 ####escribo el inp de k=1 con la nueva carga
-mdb.jobs[nameinpK].writeInput(consistencyChecking=OFF)
-
-##
+# mdb.jobs[nameinpK].writeInput(consistencyChecking=OFF)
+# Do not return control till job is finished running
+# mdb.jobs[nameinpK].waitForCompletion()
 
 ###inicializamos variables:
 NeL2damageKm1=[]
 datos_salida=[]
 #%%bucle k. Ahora la k y la m estan acopladas. Simplemente cuando hay dagno no aumento carga y cuando termina de dagnar aumento
+if pasosK==0:
+    filedicc=open(actual_directory+'/datospasoscompletoUINTER.pkl','wb')    
+    pickle.dump(datos_salida,filedicc)
+    filedicc.close()
+    if godb==1:
+        list_odbs=(['*_K'+str(0)+'.odb'])
+        mover_archivos(list_odbs,Dirname)
+
+    move('datospasoscompletoUINTER.pkl',Dirname)
+    move(nameodbcompleto,Dirname)
+    list_delete = (['*_K'+str(0)+'.*','*'+str(0)+'.inp','*'+str(1)+'.inp'])
+    borrar_archivos(list_delete)    
+    list_delete = ('*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
+                   '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
+    borrar_archivos(list_delete)
+    end = time.time()
+    os._exit(0)
 for k in range(1,pasosK+1):
-    #%% hacemos dos inp: uno con N=1 y otro con N=2 para el primer paso
+    #%% hacemos dos inp: uno con N=1 y otro con N=2 para cada paso
+    
     #%%PREPARAMOS LOS DOS INP PARA CADA N. 
     #SE PREPARAN DESDE EL INP ORIGEN, PARA REVISAR POSTERIORMENTE LOS INP SI QUEREMOS
     #creamos los inp nuevos
     nameinpN1k=nameinpK+'_N1_K'+str(k)
     nameinpN2k=nameinpK+'_N2_K'+str(k)
-    copy(nameinpK+'.inp',nameinpN1k+'.inp')  
-    copy(nameinpK+'.inp',nameinpN2k+'.inp')  
-    #abrimos el inp y buscamos la frase con las pripiedades de la UMAT o Uinter
+    shutil.copyfile(nameinpK+'.inp',nameinpN1k+'.inp')
+    shutil.copyfile(nameinpK+'.inp',nameinpN2k+'.inp')
+    # copy(nameinpK+'.inp',nameinpN1k+'.inp')  
+    # copy(nameinpK+'.inp',nameinpN2k+'.inp')  
+    #
     #Buscamos uinter='*Surface Interaction'
-    cadenasCohesivo=lineasdefinteraccion(nameinpK+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
+    cadenasCohesivo=lineasdefinteraccion(nameinpK+'.inp', '*Surface Interaction',3) #buscamos la cadena a cambiar
     #reemplazamos la primera linea en los dos archivos de inicio
     replacement(nameinpN1k+'.inp', cadenasCohesivo[0], cadenasUinter[0])
     replacement(nameinpN2k+'.inp', cadenasCohesivo[0], cadenasUinter[0])
@@ -232,15 +307,51 @@ for k in range(1,pasosK+1):
         explicitPrecision=SINGLE, nodalOutputPrecision=SINGLE, userSubroutine=nameUMAT, 
         scratch=actual_directory, parallelizationMethodExplicit=DOMAIN, numDomains=cpus, 
         activateLoadBalancing=False, multiprocessingMode=DEFAULT, numCpus=cpus)
-
-    myJobN1.submit(consistencyChecking=OFF)
-    myJobN2.submit(consistencyChecking=OFF)
-    myJobN1.waitForCompletion()
-    myJobN2.waitForCompletion()
-
+    
+    commandN1 = 'abaqus job={} user={} interactive'.format(myJobN1.name,nameUMAT)
+    commandN2 = 'abaqus job={} user={} interactive'.format(myJobN2.name,nameUMAT)
+    try:
+        os.remove(signalFile)
+        # Also remove the Abaqus lock file if it exists
+        if os.path.exists('{}.lck'.format(myJobN1.name)):
+            os.remove('{}.lck'.format(myJobN1.name))
+    except OSError:
+        pass # Ignore errors if files don't exist
+    # --- 2. LAUNCH ABAQUS (NON-BLOCKING) ---
+    # subprocess.Popen launches the command in a new process
+    # and the script immediately continues to the next line.
+    process1 = subprocess.Popen(commandN1, shell=True)
+    process2 = subprocess.Popen(commandN2, shell=True)
+    # myJobN1.submit(consistencyChecking=OFF)
+    # myJobN2.submit(consistencyChecking=OFF)
+    # myJobN1.waitForCompletion()
+    # myJobN2.waitForCompletion()
+    
+    # --- 3. MONITOR THE JOB (POLLING LOOP) ---
+    # The 'process.poll()' method checks if the subprocess has terminated.
+    # It returns 'None' if it's still running.
+    while (process2.poll()) is None:
+        "Waiting for '{}' to finish... (checking again in 10 seconds)".format(myJobN2.name)
+        # 'time.sleep()' makes the script pause, preventing it from
+        # using 100% CPU while it waits.
+        time.sleep(10)
+        
+    "\n--- Abaqus job has finished ---"
+    "--- The Abaqus process returned exit code: {} ---".format(process1.returncode)
+    "--- The Abaqus process returned exit code: {} ---".format(process2.returncode)
+    
+    # --- Check for the signal file after the job finishes ---
+    if os.path.exists(signalFile):
+        with open(signalFile, 'r') as f:
+            content = f.read().strip()
+        print('Abaqus job terminated early by UINTER')
+        print('Signal received: ',content)
+        
+        # Clean up the signal file
+        os.remove(signalFile)
     #%%ABRIMOS LOS ODB 
-    enerHtotalN1,sumaenerinterN1,NeL2damageKN1,NeL2damagetotalN1,tf=PMTESCabaqus.PMTESCcritEneUMAT(nameinpN1k, control,cadenanombreSDV)
-    enerHtotalN2,sumaenerinterN2,NeL2damageKN2,NeL2damagetotalN2,tf=PMTESCabaqus.PMTESCcritEneUMAT(nameinpN2k, control,cadenanombreSDV)
+    enerHtotalN1,sumaenerinterN1,NeL2damageKN1,NeL2damagetotalN1,tf,energy_evol=PMTESCabaqus.PMTESCcritEneUMAT(nameinpN1k, control,cadenanombreSDV)
+    enerHtotalN2,sumaenerinterN2,NeL2damageKN2,NeL2damagetotalN2,tf,energy_evol=PMTESCabaqus.PMTESCcritEneUMAT(nameinpN2k, control,cadenanombreSDV)
     
     #%%decidimos que hacer en paso siguiente
     if len(NeL2damageKN1)>0.0 or len(NeL2damageKN2)>0.0:
@@ -248,6 +359,7 @@ for k in range(1,pasosK+1):
             odbdef=nameinpN1k 
             NeL2damage=NeL2damageKN1
             NeL2damagetotal=NeL2damagetotalN1
+            
         else:
             odbdef=nameinpN2k
             NeL2damage=NeL2damageKN2
@@ -258,8 +370,8 @@ for k in range(1,pasosK+1):
         NeL2damage=NeL2damageKN1
         NeL2damagetotal=NeL2damagetotalN1								 
     ###salida de datos, solo para revisar o graficar
-    enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf=PMTESCabaqus.PMTESCcritEneUMAT(odbdef,control,cadenanombreSDV)
-    model_outputfile(sim_file,k,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),enerHtotalN2,sumaenerinterN2,len(NeL2damageKN2),len(NeL2damagetotalN))
+    enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqus.PMTESCcritEneUMAT(odbdef,control,cadenanombreSDV)
+    model_outputfile(sim_file,k,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),enerHtotalN2,sumaenerinterN2,len(NeL2damageKN2),len(NeL2damagetotalN),energy_evol)
     datos_salida.append([float(newload),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),enerHtotalN2,sumaenerinterN2,len(NeL2damageKN2),odbdef,len(NeL2damagetotalN)])
     #%%preparamos el siguiente inp desde el odb anterior
     #importamos el inp inicial sin CI impuestas para crear el nuevo modelo del paso siguiente 
@@ -300,11 +412,11 @@ for k in range(1,pasosK+1):
     mdb.jobs[nameinp_k_mas_1].writeInput(consistencyChecking=OFF)
     #dejamos el inp basico por donde empezara el bucle con los diferentes inicios
     nameinpK=nameinp_k_mas_1
-    print('Updated applied load: ',newload)
+    # print('Updated applied load: ',newload)
     #%% agnadimos el nuevo odb al nuevo odb completo para la salida
     if k==1:
         nameodbcompleto=nameinp+'_completo.odb'
-        copy (odbdef+'.odb',nameodbcompleto)
+        copy(odbdef+'.odb',nameodbcompleto)
     else:
         call('abaqus restartjoin originalodb='+nameodbcompleto+' restartodb='+odbdef+'.odb'+' history',shell=True)
     ### borramos archivos menos el odb que sera opcional. No se puede hacer antes 
@@ -313,8 +425,10 @@ for k in range(1,pasosK+1):
             list_odbs=(['*_K'+str(k-1)+'.odb'])
             mover_archivos(list_odbs,Dirname)
         #borramos el resto de archivos de ese paso                                          
-        list_delete = (['*_K'+str(k-1)+'.*','*'+str(k-1)+'.inp'])
-        #borrar_archivos(list_delete)
+        
+        # list_delete = (['*_K'+str(k-1)+'.odb','*'+str(k-1)+'.inp'],'*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
+        #                '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
+        # borrar_archivos(list_delete)
 #%%final  
 filedicc=open(actual_directory+'/datospasoscompletoUINTER.pkl','wb')    
 pickle.dump(datos_salida,filedicc)
@@ -326,9 +440,9 @@ if godb==1:
 move('datospasoscompletoUINTER.pkl',Dirname)
 move(nameodbcompleto,Dirname)
 list_delete = (['*_K'+str(k)+'.*','*'+str(k)+'.inp','*'+str(k+1)+'.inp'])
-borrar_archivos(list_delete)    
-list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
-               '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
+# borrar_archivos(list_delete)    
+list_delete = ('*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
+               '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt','*.fil')
 borrar_archivos(list_delete)
 end = time.time()
 print('La simulacion ha terminado satisfactoriamente en %.2f' %((end-start)/60)+' min')
