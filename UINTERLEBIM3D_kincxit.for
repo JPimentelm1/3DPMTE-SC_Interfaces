@@ -477,7 +477,7 @@ c           CC-FFM:
  	      damage=ZERO
  	      NODECC=NODECC+ONE
             KINC_failn(KINC,1)=KINC !
-            KINC_failn(KINC,2)=ALLSEv
+            KINC_failn(KINC,2)=ALLWKv
             KINC_failnm1(KINC,1)=KINC
             KINC_failnm1(KINC,2)=NODECC
             IF (KINC.GT.3) THEN
@@ -496,6 +496,10 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
 !                  WRITE(30,*) 'EARLY_EXIT_CONDITION_MET'
 !                  CLOSE(30)
                 CALL XIT()
+                
+                ELSE IF ((KINC.GT.10).AND.(endflag.EQ.TRUE)) THEN
+                WRITE(*,*) 'UINTER: dam0, MAX. ITER. REACHED:',KINC
+                CALL XIT()
                 ENDIF
             ENDIF
 C       simultaneous fulfillment of nodal stress- and energy- criterion:            
@@ -503,7 +507,7 @@ C       simultaneous fulfillment of nodal stress- and energy- criterion:
  	      damage=ONE
 ! 	      NODECC=NODECC+damage
             KINC_failn(KINC,1)=KINC !
-            KINC_failn(KINC,2)=ALLSEv
+            KINC_failn(KINC,2)=ALLWKv
             IF (KINC.GT.3) THEN
                 eps0=ABS(KINC_failn(kinc,2)-KINC_failn(kinc-1,2))/
      &          KINC_failn(kinc,2)
@@ -528,8 +532,12 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
         ENDIF
         ENDIF !salimos de la evalucaion de damageT y del damageE
 
-!        IF ((KINC.GT.ONE)) THEN
-! 	   
+        IF ((KINC.GT.3).AND.(all(FAILED_DATA(:,10).EQ.ZERO))) THEN
+            ! FAILED_DATA array has not been updated
+            WRITE(*,*) 'UINTER: stress cond. array is empty, exit.'
+            CALL XIT()
+        ENDIF
+ 
 !        ENDIF      
       !el final del bucle de damagemenosK. Garantiza la irreversibilidad
       ENDIF
@@ -793,8 +801,8 @@ C       Check if the record key is the one for total energies
         ! Check for history record key (e.g., key 1999 for energy)
            IF (KEY .EQ. 1999) THEN
               ! ARRAY(3) may contain ALLSE value; verify via debugging
-              ALLSEv = ARRAY(4)
-              ALLWKv = 2*ARRAY(5)
+              ALLSEv = ARRAY(6)
+              ALLWKv = ARRAY(5)
               WRITE(6,*) 'ALLSEv at increment ', KINC, ':',ALLSEv,ALLWKv
 C         Exit the loop
               GOTO 110
