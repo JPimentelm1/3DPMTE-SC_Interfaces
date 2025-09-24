@@ -52,6 +52,7 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 
           call random_number ( harvest = r1 )
           call random_number ( harvest = r2 )
+	!	  Box-Muller transformation:
           x = sqrt ( - 2.0D+00 * log ( r1 ) ) *
      &        cos ( 2.0D+00 * r8_pi * r2 )
 
@@ -274,7 +275,7 @@ c     calculo de energia del criterio tensional
       GiiiT=(STRESS(3))**2.d0/(2.d0*Ktt2)
 c     calculo de energia del criterio energetico 
 C     en comparacion con la UMAT aqui el RDISP es desplazamiento relativo
-c     al final de a iteración
+c     al final de a iteraciÃ³n
       IF (RDISP(1)<0.d0) THEN
         GiE=Knn*((RDISP(1))**2.d0)/(2.d0)
       ELSE
@@ -661,7 +662,7 @@ c
           END DO
       END SUBROUTINE
             
-C     ºººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººº            
+C     ÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂº            
       RECURSIVE SUBROUTINE QUICKSORT_BY_COL3(DATA, FIRST, LAST, NCOLS)
           REAL*8, INTENT(INOUT) :: DATA(:,:)
           INTEGER, INTENT(IN) :: FIRST, LAST, NCOLS
@@ -827,4 +828,5 @@ C
       END
 C     ___________________________________________
 C     ccccccc END OF SUBROUTINE URDFIL cccccccc      
+
 C
