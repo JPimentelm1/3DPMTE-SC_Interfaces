@@ -99,7 +99,7 @@ C
       real*8 GiT,GiiT,GiiiT,GiE,GiiE,GiiiE,t,taun,tc,tauc,sigmac,sigmaeq
       real*8 Knn,Ktt1,Ktt2, GIct,GIIct,GIIIct,Nini,mu_s,eps0
       real*8 KnnE,KttE1,KttE2,signoN
-	integer k,j,i,nprops,node
+	integer k,j,i,nprops,node,control
 	integer kstep,kinc,nstatv,damage
 	real*8 sse,spd,scd,rpl,drpldt,dtime,temp,dtemp,celent,pnewdt
 	character*255 fullname, program_path
@@ -165,6 +165,8 @@ c      !READ THE MATERIAL PROPERTIES FROM THE INPUT FILE
       lambda2 = PROPS(6) 
       mu = PROPS(7)
       Nini = PROPS(8)
+C     Force:(1) or displacement:(0) control
+      control = PROPS(9)
       
 !cccccccccccccccccccccccccc inicializacion de variables
       prand = ZERO
@@ -528,7 +530,10 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
                 CALL XIT()
                 ENDIF
             ENDIF
-
+            IF ((KINC.GT.4).AND.(control.EQ.1)) THEN
+                WRITE(*,*) 'UINTER: force control max. iteration, exit.'
+                CALL XIT()
+            ENDIF
         ENDIF
         ENDIF !salimos de la evalucaion de damageT y del damageE
 
@@ -537,7 +542,7 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
             WRITE(*,*) 'UINTER: stress cond. array is empty, exit.'
             CALL XIT()
         ENDIF
- 
+        
 !        ENDIF      
       !el final del bucle de damagemenosK. Garantiza la irreversibilidad
       ENDIF
