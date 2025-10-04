@@ -52,7 +52,6 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 
           call random_number ( harvest = r1 )
           call random_number ( harvest = r2 )
-	!	  Box-Muller transformation:
           x = sqrt ( - 2.0D+00 * log ( r1 ) ) *
      &        cos ( 2.0D+00 * r8_pi * r2 )
 
@@ -275,7 +274,7 @@ c     calculo de energia del criterio tensional
       GiiiT=(STRESS(3))**2.d0/(2.d0*Ktt2)
 c     calculo de energia del criterio energetico 
 C     en comparacion con la UMAT aqui el RDISP es desplazamiento relativo
-c     al final de a iteraciÃ³n
+c     al final de la iteración
       IF (RDISP(1)<0.d0) THEN
         GiE=Knn*((RDISP(1))**2.d0)/(2.d0)
       ELSE
@@ -531,7 +530,7 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
                 CALL XIT()
                 ENDIF
             ENDIF
-            IF ((KINC.GT.4).AND.(control.EQ.1)) THEN
+            IF ((KINC.GT.5).AND.(control.EQ.1)) THEN
                 WRITE(*,*) 'UINTER: force control max. iteration, exit.'
                 CALL XIT()
             ENDIF
@@ -662,7 +661,7 @@ c
           END DO
       END SUBROUTINE
             
-C     ÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂºÂº            
+C     ºººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººº            
       RECURSIVE SUBROUTINE QUICKSORT_BY_COL3(DATA, FIRST, LAST, NCOLS)
           REAL*8, INTENT(INOUT) :: DATA(:,:)
           INTEGER, INTENT(IN) :: FIRST, LAST, NCOLS
@@ -806,20 +805,14 @@ C----- Next increment begins -> stop scanning this increment
 C       Check if the record key is the one for total energies
         ! Check for history record key (e.g., key 1999 for energy)
            IF (KEY .EQ. 1999) THEN
+C             Extract the Total Strain Energies
               ! ARRAY(3) may contain ALLSE value; verify via debugging
               ALLSEv = ARRAY(6)
               ALLWKv = ARRAY(5)
               WRITE(6,*) 'ALLSEv at increment ', KINC, ':',ALLSEv,ALLWKv
-C         Exit the loop
+C           Exit the loop
               GOTO 110
            END IF
-!        IF (KEY .EQ. 1999) THEN
-!C         Extract the Total Strain Energy from the first position
-!          ALLSEv = ARRAY(5)
-!          WRITE(*,*) ALLSEv
-!C         Exit the loop
-!          GOTO 110
-!        END IF
       END DO
 C
 110   CONTINUE           
@@ -828,5 +821,4 @@ C
       END
 C     ___________________________________________
 C     ccccccc END OF SUBROUTINE URDFIL cccccccc      
-
 C
