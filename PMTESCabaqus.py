@@ -349,11 +349,18 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
         # np.savetxt(name_files+'Asetcrit.txt', Asetcrit, fmt=fmt, delimiter='\t')
     else: print('A_sigma set is empty')
     
-    # concentrated force extraction:
-    dcbtoparm = odb.rootAssembly.nodeSets['TOPRP']
-    tf_field=lastFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
-    dcbtf2_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
-    
+    # concentrated force OR disp. extraction:
+    dcbtoparm = odb.rootAssembly.nodeSets['TOPN']
+    # control point dispalcement extraction:
+    if control==0:
+        tf_field=lastFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+        dcbtf2_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
+    elif control!=0:
+        # concentrated force extraction:
+        tf_field=lastFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+        tf_fieldlst = [fv.data for fv in tf_field.values]
+        # tf_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
+        dcbtf2_field = sum(tf_fieldlst)
     #para sacar la energia	
     key_HisReg = odb.steps[key_step[0]].historyRegions.keys()
     path_HisRegEne = odb.steps[key_step[0]].historyRegions[key_HisReg[0]]
@@ -410,6 +417,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
             interf_energdiss=float(0)
             # initialize fracture surface defined by stress condition:
             area_stressc=float(0)
+            atotal=float(0)
             # initialize fracture surface fulfilling the coupled criterion FFM:
             area_ccffm=float(0)
             path_SDV1=frame.fieldOutputs['SDV1     '+cadenanombreSDV].values
@@ -428,6 +436,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 damTval=damT[k].data
                 damEval=damE[k].data
                 areacontacto=path_SDV12[k].data
+                atotal=areacontacto+atotal
                 interf_strnenergy=interf_strnenergy+(GtE*areacontacto)+(GcrE*areacontacto)
                 # if damTval==1. and damEval==1.:
                     
@@ -436,9 +445,10 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 if damTval==1. and damEval==1.:
                     area_ccffm = area_ccffm + areacontacto
                     interf_energdiss=interf_energdiss + (GcrE*areacontacto)
+                    print(path_SDV1[k].data,interf_strnenergy,interf_energdiss)
             # 
             if control==1:
-                PIf = allse_history.data[frame.frameId][1]+interf_strnenergy-2*allwk_history.data[frame.frameId][1]
+                PIf = allse_history.data[frame.frameId][1]+interf_strnenergy-allwk_history.data[frame.frameId][1]
                 PI_frame.append(PIf)
             else:
                 PIf = allse_history.data[frame.frameId][1]+interf_strnenergy
@@ -447,7 +457,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
             # The .data attribute for these objects is a tuple, e.g., (time, value)
             # We are interested in the value, which is at index 1.
             if frame.frameId<1: 
-                allwk0 = 2*allwk_history.data[frame.frameId][1]
+                allwk0 = 1*allwk_history.data[frame.frameId][1]
                 allse0 = allse_history.data[frame.frameId][1]
                 if control==1:
                     totalPot0 = allse0+interf_strnenergy-allwk0
@@ -458,7 +468,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 energy_data.append([frame.frameId, totalPot0, allse0, 0.0, deltaR_frame[0], 0.0, area_stressc, area_ccffm])
             
             else:        
-                allwk_value = 2*allwk_history.data[frame.frameId][1]
+                allwk_value = 1*allwk_history.data[frame.frameId][1]
                 allse_value = allse_history.data[frame.frameId][1]
                 if control==1:
                     totalPotenergy = allse_value+interf_strnenergy-allwk_value
@@ -469,6 +479,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 delR=deltaR_frame[-1]
                 # Append the extracted data as a list
                 energy_data.append([frame.frameId, totalPotenergy, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
+            # print(frame.frameId,totalPotenergy,atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
         # save the numpy energy evolution as a .txt file:
         tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e']
         np.savetxt(name_files+'_delPIdelRevol.txt', np.array(energy_data), delimiter='\t', fmt=tbl_format)
