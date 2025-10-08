@@ -218,7 +218,7 @@ cargainicial=1
 # initial step:
 k=1
 # Bisection algorithm stop tolerance
-bisectol=1.E-3
+bisectol=1.0E-3
 # Initial bisection tolerance
 eps0=1
 # Bisection iteration counter
@@ -228,7 +228,7 @@ numiter=45
 #
 Nmin = round(-mth.log10(bisectol)/mth.log10(2))
 
-nameinp='DCBuinter_L237m1'
+nameinp='DCBuinter'
 UINTER_lst=['UINTERLEBIM3D_kincxit.for','UINTERLEBIMAMA3D.for']
 # nameUMAT=UINTER_lst[0]
 nameSUBR=UINTER_lst[0]
@@ -236,7 +236,7 @@ amplname='AMP-1'
 godb=1  #si quiero guardar todos los odb pongo 1, si no 0
 #definicion de mi uinter para cambiar
 cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=9\n','\n']
-cadenasUinterN=[300.,600.,600.,0.09375,0.,0.,8.]
+cadenasUinterN=[150.,600.,600.,0.750,0.,0.,1.]
 
 # 11 starting damage configurations:
 cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+", "+str(control)+'\n']))]

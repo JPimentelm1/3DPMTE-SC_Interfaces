@@ -249,7 +249,7 @@ def PMTESCcritEneUMAT(name_files, control,cadenanombreSDV):
                 delPI=totalPotenergy-PI_frame[1]
                 delR=deltaR_frame[-1]
                 # Append the extracted data as a list
-                energy_data.append([frame.frameId, totalPotenergy, allse_value, delPI, delR, delPI+delR])
+                energy_data.append([frame.frameId, totalPotenergy+delR, allse_value, delPI, delR, delPI+delR])
         # save the numpy energy evolution as a .txt file:
         tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e']
         np.savetxt(name_files+'_delPIdelRevol.txt', np.array(energy_data), delimiter='\t', fmt=tbl_format)
@@ -437,16 +437,20 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 damEval=damE[k].data
                 areacontacto=path_SDV12[k].data
                 atotal=areacontacto+atotal
-                interf_strnenergy=interf_strnenergy+(GtE*areacontacto)+(GcrE*areacontacto)
-                # if damTval==1. and damEval==1.:
-                    
+                if path_SDV1[k].data==0.:
+                    interf_strnenergy=interf_strnenergy+(GtE*areacontacto)+(GcrE*areacontacto)
+                # Stress criterion fulfilled:
                 if damTval==1.:
                     area_stressc = area_stressc + areacontacto
+                # CCFFM criterion:
                 if damTval==1. and damEval==1.:
                     area_ccffm = area_ccffm + areacontacto
                     interf_energdiss=interf_energdiss + (GcrE*areacontacto)
+                    interf_strnenergy=interf_strnenergy - (GcrE*areacontacto)
+                    
                     print(path_SDV1[k].data,interf_strnenergy,interf_energdiss)
-            # 
+            # also:
+                # interf_strnenergy=ALLWK-ALLSE
             if control==1:
                 PIf = allse_history.data[frame.frameId][1]+interf_strnenergy-allwk_history.data[frame.frameId][1]
                 PI_frame.append(PIf)
@@ -478,7 +482,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 delPI=totalPotenergy-PI_frame[1]
                 delR=deltaR_frame[-1]
                 # Append the extracted data as a list
-                energy_data.append([frame.frameId, totalPotenergy, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
+                energy_data.append([frame.frameId, totalPotenergy+delR, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
             # print(frame.frameId,totalPotenergy,atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
         # save the numpy energy evolution as a .txt file:
         tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e']
