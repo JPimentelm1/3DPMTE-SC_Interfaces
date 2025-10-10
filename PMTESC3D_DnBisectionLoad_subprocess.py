@@ -224,19 +224,19 @@ eps0=1
 # Bisection iteration counter
 bisect_itercnt=1
 # Bisection limit of iterations
-numiter=45
+numiter=50
 #
 Nmin = round(-mth.log10(bisectol)/mth.log10(2))
 
-nameinp='DCBuinter'
-UINTER_lst=['UINTERLEBIM3D_kincxit.for','UINTERLEBIMAMA3D.for']
+nameinp='DCBuinter_L237m1'
+UINTER_lst=['UINTERLEBIM3D_kincxit.f','UINTERLEBIMAMA3D.for']
 # nameUMAT=UINTER_lst[0]
 nameSUBR=UINTER_lst[0]
 amplname='AMP-1'
 godb=1  #si quiero guardar todos los odb pongo 1, si no 0
 #definicion de mi uinter para cambiar
 cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=9\n','\n']
-cadenasUinterN=[150.,600.,600.,0.750,0.,0.,1.]
+cadenasUinterN=[300.,600.,600.,0.09375,0.0,0.0,8.]
 
 # 11 starting damage configurations:
 cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+", "+str(control)+'\n']))]
@@ -256,7 +256,7 @@ Uinterprops=[cadenasUinterN1,cadenasUinterN11]
 cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
 # cadenanombreSDV='ASSEMBLY_VIGA_INF_SUPER_SUP/ASSEMBLY_VIGA_SUP_SUPER_INF'
 cadenanombreSDV='ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF'
-Dirname='AdaptiveF_ODBs-'+nameinp+'_knn'+str(cadenasUinterN[0])+'_mu'+str(cadenasUinterN[-1])+'_control'+str(control)
+Dirname='AdaptiveF_ODBs-'+nameinp+'_knn'+str(cadenasUinterN[0])+'_mu'+str(cadenasUinterN[-1])
 
 ##para cluster
 #cpus=10
@@ -308,12 +308,15 @@ myJob = mdb.JobFromInputFile(name=nameodbcargainicial,
         scratch=actual_directory, parallelizationMethodExplicit=DOMAIN, numDomains=cpus, 
         activateLoadBalancing=False, multiprocessingMode=DEFAULT, numCpus=cpus)
 
+# myJob.submit(consistencyChecking=OFF)
+# myJob.waitForCompletion()
+
 # --- 1. SETUP ---
 jobName = myJob.name
 # The command to run Abaqus from the command line
 # 'interactive' tells Abaqus to run the job and then exit.
 # Define the absolute path to the executable
-abaqus_executable = r'C:\SIMULIA\Abaqus\6.14-1\code\bin\abq6141.exe'
+abaqus_executable = '/opt/abaqus/Commands/abq2022'
 
 # Populate the template with all necessary variables
 # Build a list of command arguments
@@ -336,22 +339,19 @@ except OSError:
 # subprocess.Popen launches the command in a new process
 # and the script immediately continues to the next line.
 process = subprocess.Popen(command, cwd=actual_directory)
-# myJob.submit(consistencyChecking=OFF)
-# myJob.waitForCompletion()
 print("--- Now entering monitoring loop... ---")
 
 # --- 3. MONITOR THE JOB (POLLING LOOP) ---
 # The 'process.poll()' method checks if the subprocess has terminated.
 # It returns 'None' if it's still running.
-# while process.poll() is None:
-#     "Waiting for '{}' to finish... (checking again in N seconds)".format(jobName)
-#     # 'time.sleep()' makes the script pause, preventing it from
-#     # using 100% CPU while it waits.
-#     time.sleep(10)
-# The return code (0 for success) is captured.
-return_code = process.wait()    
+while process.poll() is None:
+    "Waiting for '{}' to finish... (checking again in N seconds)".format(jobName)
+    # 'time.sleep()' makes the script pause, preventing it from
+    # using 100% CPU while it waits.
+    time.sleep(10)
+    
 "\n--- Abaqus job has finished ---"
-"--- The Abaqus process returned exit code: {} ---".format(return_code)
+"--- The Abaqus process returned exit code: {} ---".format(process.returncode)
 
 # --- Check for the signal file after the job finishes ---
 if os.path.exists(signalFile):
@@ -496,7 +496,7 @@ while (k<=numiter):
         # Set the ABAQUS_SCRATCH variable for this specific job
         # job_env["ABAQUS_SCRATCH"] = work_dir
         
-        abaqus_executable = r'C:\SIMULIA\Abaqus\6.14-1\code\bin\abq6141.exe'
+        abaqus_executable = '/opt/abaqus/Commands/abq2022'
 
         # Populate the template with all necessary variables
         # Build a list of command arguments

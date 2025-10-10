@@ -351,7 +351,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
     
     # concentrated force OR disp. extraction:
     dcbtoparm = odb.rootAssembly.nodeSets['TOPN']
-    # control point dispalcement extraction:
+    # control point displacement extraction:
     if control==0:
         tf_field=lastFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
         dcbtf2_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
@@ -376,7 +376,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
         GtE=GtotE[k].data
         GcrE=GcE[k].data
         areacontacto=path_SDV12[k].data
-        sumaenerinter=sumaenerinter+(GtE*areacontacto)+(GcrE*areacontacto)
+        # sumaenerinter=sumaenerinter+(GtE*areacontacto)+(GcrE*areacontacto)
         if damage==1.0:
             NeL2damagetotal.append(NeG)
             if damageKmenos1==0.0:          
@@ -398,6 +398,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
 #
     # Initialize a list to store the results
     energy_data = []
+    energy_data2 = []
     # Loop over all steps in the odb
     for step_name in odb.steps.keys():
         # print(f"Processing Step: {step_name}...")
@@ -446,36 +447,37 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 if damTval==1. and damEval==1.:
                     area_ccffm = area_ccffm + areacontacto
                     interf_energdiss=interf_energdiss + (GcrE*areacontacto)
-                    interf_strnenergy=interf_strnenergy - (GcrE*areacontacto)
-                    
                     print(path_SDV1[k].data,interf_strnenergy,interf_energdiss)
-            # also:
+            
+            deltaR_frame.append(interf_energdiss)
+            # alternative:
                 # interf_strnenergy=ALLWK-ALLSE
             if control==1:
-                PIf = allse_history.data[frame.frameId][1]+interf_strnenergy-allwk_history.data[frame.frameId][1]
+                PIf = -(allse_history.data[frame.frameId][1]+interf_strnenergy)
+                # -allwk_history.data[frame.frameId][1]
                 PI_frame.append(PIf)
             else:
                 PIf = allse_history.data[frame.frameId][1]+interf_strnenergy
                 PI_frame.append(PIf)
-            deltaR_frame.append(interf_energdiss)
+            
             # The .data attribute for these objects is a tuple, e.g., (time, value)
             # We are interested in the value, which is at index 1.
             if frame.frameId<1: 
                 allwk0 = 1*allwk_history.data[frame.frameId][1]
                 allse0 = allse_history.data[frame.frameId][1]
                 if control==1:
-                    totalPot0 = allse0+interf_strnenergy-allwk0
+                    totalPot0 = -(allse0+interf_strnenergy)
                 else:
                     totalPot0 = allse0+interf_strnenergy
                 
                 # Append the extracted data as a list to our main list
                 energy_data.append([frame.frameId, totalPot0, allse0, 0.0, deltaR_frame[0], 0.0, area_stressc, area_ccffm])
-            
+                energy_data2.append([frame.frameId, totalPot0, interf_strnenergy, allse0, 0.0, deltaR_frame[0], 0.0, area_stressc, area_ccffm])
             else:        
                 allwk_value = 1*allwk_history.data[frame.frameId][1]
                 allse_value = allse_history.data[frame.frameId][1]
                 if control==1:
-                    totalPotenergy = allse_value+interf_strnenergy-allwk_value
+                    totalPotenergy = -(allse_value+interf_strnenergy)
                 else:
                     totalPotenergy = allse_value+interf_strnenergy
                 
@@ -483,10 +485,13 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 delR=deltaR_frame[-1]
                 # Append the extracted data as a list
                 energy_data.append([frame.frameId, totalPotenergy+delR, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
+                energy_data2.append([frame.frameId, totalPotenergy+delR, interf_strnenergy, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
             # print(frame.frameId,totalPotenergy,atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
         # save the numpy energy evolution as a .txt file:
         tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e']
+        tbl2_format=['%d', '%.10e', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e']
         np.savetxt(name_files+'_delPIdelRevol.txt', np.array(energy_data), delimiter='\t', fmt=tbl_format)
+        np.savetxt(name_files+'_delPIdelRevol2.txt', np.array(energy_data2), delimiter='\t', fmt=tbl2_format)
         print('Total energy evolution array:')
         print(np.array(energy_data))
     import displayGroupOdbToolset as dgo
