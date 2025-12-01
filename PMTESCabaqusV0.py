@@ -314,7 +314,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
     GcE=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV8     '+cadenanombreSDV].values
     # damT=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV9     '+cadenanombreSDV].values
     
-    nodecnt=0 #node counter of nodes which define stress condition
+    # nodecnt=0 #node counter of nodes which define stress condition
     Asigma_lst=[] #empty list where to store the interface vars. that define Asigma
     # for loop of interface nodes:
     for node in range(len(nodeglob)):
@@ -328,7 +328,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
         # convert the list into a numpy data array:
         Asetcritres=np.array(Asigma_lst)
         # numpy random normal distribution:
-        p=0.0 # 0, 0.1, 0.2, 0.3,... constant of multiplication
+        p=0.0 # 0, 0.1, 0.2, 0.3,...constant of multiplication
         sigma=1 #standard deviation: 0.25, 0.5, 1,...
             
         chirandomv2 = np.random.normal(0,sigma,len(Asigma_lst))
@@ -351,7 +351,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
     
     # concentrated force OR disp. extraction:
     dcbtoparm = odb.rootAssembly.nodeSets['TOPN']
-    # control point displacement extraction:
+    # control point dispalcement extraction:
     if control==0:
         tf_field=lastFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
         dcbtf2_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
@@ -376,7 +376,7 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
         GtE=GtotE[k].data
         GcrE=GcE[k].data
         areacontacto=path_SDV12[k].data
-        # sumaenerinter=sumaenerinter+(GtE*areacontacto)+(GcrE*areacontacto)
+        sumaenerinter=sumaenerinter+(GtE*areacontacto)+(GcrE*areacontacto)
         if damage==1.0:
             NeL2damagetotal.append(NeG)
             if damageKmenos1==0.0:          
@@ -396,11 +396,10 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
     # else:
     #     eneHtotal = eneDefSolidos+sumaenerinter
 #
-    # Initialize a list to store the results
-    energy_data = []
-    energy_data2 = []
     # Loop over all steps in the odb
     for step_name in odb.steps.keys():
+        # Initialize a list to store the results
+        energy_data = []
         # print(f"Processing Step: {step_name}...")
         step = odb.steps[step_name]
         # Get the history region for the whole model from the STEP object
@@ -409,10 +408,68 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
         allwk_history = whole_model_region.historyOutputs['ALLWK']
         allse_history = whole_model_region.historyOutputs['ALLSE']
         
+        Uel_frame=[]
         PI_frame=[]
         deltaR_frame=[]
+        Ut_frame=[]
+        
+        # Extract total potential energy at the end of first increment:
+        for frame in step.frames:
+            currentFrame = step.frames[frame.frameId]
+            if frame.frameId==1:
+                # initialize interface energy to zero at each increment:
+                interf_strnenergy=float(0)
+                interf_energdiss=float(0)
+                # initialize fracture surface defined by stress condition:
+                area_stressc=float(0)
+                atotal=float(0)
+                # initialize fracture surface fulfilling the coupled criterion FFM:
+                area_ccffm=float(0)
+                
+                path_SDV1=currentFrame.fieldOutputs['SDV1     '+cadenanombreSDV].values
+                GtotE=currentFrame.fieldOutputs['SDV7     '+cadenanombreSDV].values
+                GcE=currentFrame.fieldOutputs['SDV8     '+cadenanombreSDV].values
+                damT=currentFrame.fieldOutputs['SDV9     '+cadenanombreSDV].values
+                damE=currentFrame.fieldOutputs['SDV10    '+cadenanombreSDV].values
+                allse_value = allse_history.data[frame.frameId][1]
+                ut_value = float(0)
+                tforce_field = []
+                ut_field=currentFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+                ut_value=abs(ut_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data)
+                Ut_frame.append(ut_value)
+                for k in range(len(path_SDV1)):
+                    GtE=GtotE[k].data
+                    GcrE=GcE[k].data
+                    damTval=damT[k].data
+                    damEval=damE[k].data
+                    areacontacto=path_SDV12[k].data
+                    atotal=areacontacto+atotal
+                    # if path_SDV1[k].data==float(0): #active spring
+                    interf_strnenergy=interf_strnenergy + (GtE*areacontacto)
+                    # else: #broken spring
+                    #     interf_strnenergy=interf_strnenergy
+                    # Stress criterion fulfilled:
+                    if damTval==1.:
+                        area_stressc = area_stressc + areacontacto
+                    # CCFFM criterion:
+                    if damTval==1. and damEval==1.:
+                        area_ccffm = area_ccffm + areacontacto
+                        interf_energdiss=interf_energdiss + (GcrE*areacontacto)
+                # concentrated force extraction:
+                tforce=currentFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+                tforce_field = [fv.data for fv in tforce.getSubset(region=dcbtoparm,position=NODAL).values]
+                totalf_field = 2*abs(sum(tforce_field))
+                # at frame=1, elastic strain energy='ALLWK', which is also valid
+                    # for a geometric nonlinear static analysis
+                if control==1:
+                    PI0 = (allwk_history.data[frame.frameId][1]) - (totalf_field*ut_value)
+                else:
+                    PI0 = (allwk_history.data[frame.frameId][1])
+                print('PI_0: ',PI0)
+                
         # Loop over all frames (increments) in the current step:
         for frame in step.frames:
+            currentFrame = step.frames[frame.frameId]
             # initialize interface energy to zero at each increment:
             interf_strnenergy=float(0)
             interf_energdiss=float(0)
@@ -421,25 +478,28 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
             atotal=float(0)
             # initialize fracture surface fulfilling the coupled criterion FFM:
             area_ccffm=float(0)
-            path_SDV1=frame.fieldOutputs['SDV1     '+cadenanombreSDV].values
+            path_SDV1=currentFrame.fieldOutputs['SDV1     '+cadenanombreSDV].values
             # nodeglob=frame.fieldOutputs['SDV2     '+cadenanombreSDV].values
             # path_SDV11=frame.fieldOutputs['SDV11    '+cadenanombreSDV].values
-            path_SDV12=frame.fieldOutputs['SDV12    '+cadenanombreSDV].values
+            path_SDV12=currentFrame.fieldOutputs['SDV12    '+cadenanombreSDV].values
             # t2tc=frame.fieldOutputs['SDV21    '+cadenanombreSDV].values
             # tcrit=frame.fieldOutputs['SDV22    '+cadenanombreSDV].values
-            GtotE=frame.fieldOutputs['SDV7     '+cadenanombreSDV].values
-            GcE=frame.fieldOutputs['SDV8     '+cadenanombreSDV].values
-            damT=frame.fieldOutputs['SDV9     '+cadenanombreSDV].values
-            damE=frame.fieldOutputs['SDV10    '+cadenanombreSDV].values
-            for k in range(len(path_SDV12)):
+            GtotE=currentFrame.fieldOutputs['SDV7     '+cadenanombreSDV].values
+            GcE=currentFrame.fieldOutputs['SDV8     '+cadenanombreSDV].values
+            damT=currentFrame.fieldOutputs['SDV9     '+cadenanombreSDV].values
+            damE=currentFrame.fieldOutputs['SDV10    '+cadenanombreSDV].values
+            for k in range(len(path_SDV1)):
                 GtE=GtotE[k].data
                 GcrE=GcE[k].data
                 damTval=damT[k].data
                 damEval=damE[k].data
                 areacontacto=path_SDV12[k].data
                 atotal=areacontacto+atotal
-                if path_SDV1[k].data==0.:
-                    interf_strnenergy=interf_strnenergy+(GtE*areacontacto)+(GcrE*areacontacto)
+                # if path_SDV1[k].data==float(0): #active spring
+                interf_strnenergy=interf_strnenergy + (GtE*areacontacto)
+                # else: #broken spring
+                #     interf_strnenergy=interf_strnenergy
+                    
                 # Stress criterion fulfilled:
                 if damTval==1.:
                     area_stressc = area_stressc + areacontacto
@@ -447,53 +507,108 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
                 if damTval==1. and damEval==1.:
                     area_ccffm = area_ccffm + areacontacto
                     interf_energdiss=interf_energdiss + (GcrE*areacontacto)
-                    print(path_SDV1[k].data,interf_strnenergy,interf_energdiss)
+                    # interf_strnenergy=interf_strnenergy - (GcrE*areacontacto)
+                    # print(path_SDV1[k].data,interf_strnenergy,interf_energdiss)
+            #
+            allse_value = allse_history.data[frame.frameId][1]
+            ut_value = float(0)
+            tforce_field = []
+            ut_field=currentFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+            ut_value=abs(ut_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data)
+            Ut_frame.append(ut_value)
+            
+            # concentrated force extraction:
+            tforce=currentFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+            tforce_field = [fv.data for fv in tforce.getSubset(region=dcbtoparm,position=NODAL).values]
+            totalf_field = 2*abs(sum(tforce_field))
             
             deltaR_frame.append(interf_energdiss)
-            # alternative:
-                # interf_strnenergy=ALLWK-ALLSE
+            delR=deltaR_frame[-1]
             if control==1:
-                PIf = -(allse_history.data[frame.frameId][1]+interf_strnenergy)
-                # -allwk_history.data[frame.frameId][1]
-                PI_frame.append(PIf)
-            else:
-                PIf = allse_history.data[frame.frameId][1]+interf_strnenergy
-                PI_frame.append(PIf)
+                whole_model_region = step.historyRegions['Assembly ASSEMBLY']
+                allwk_history = whole_model_region.historyOutputs['ALLWK']
+                allse_history = whole_model_region.historyOutputs['ALLSE']
+                # interf_strnenergy = allwk_history.data[frame.frameId][1] - allse_history.data[frame.frameId][1]
+                # PIf = (allse_history.data[frame.frameId][1]+interf_strnenergy) - (totalf_field*ut_value)
+                if frame.frameId<=1:
+                    wpot = totalf_field*ut_value
+                    totalPotenergy = (allse_history.data[frame.frameId][1]+interf_strnenergy)-wpot
+                    # totalPotenergy = -0.5*(wpot)
+                    # totalPot0 = (allwk_history.data[frame.frameId][1])-wpot
+                    PI_frame.append(totalPotenergy)
+                    if frame.frameId==1 and PI_frame[0]!=float(0):
+                        PI0 = PI_frame[0]
+                        delPI=PI_frame[-1]-PI_frame[0]
+                    else: delPI = float(0); delR=float(0)
+                    
+                else:
+                    wpot = totalf_field*ut_value
+                    Uel_f = (allse_history.data[frame.frameId][1]+interf_strnenergy)
+                    totalPotenergy = Uel_f - wpot
+                    # totalPotenergy = -0.5*(wpot)
+                    PI_frame.append(totalPotenergy)
+                    delPI = totalPotenergy - PI0
+                Uel_frame.append(allse_history.data[frame.frameId][1]+interf_strnenergy)
+                
+                # print(PI_frame[-1],(allse_history.data[frame.frameId][1]+interf_strnenergy),-wpot)
+                energy_data.append([frame.frameId, totalPotenergy, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm, 
+                                    sum(tforce_field), ut_value])
+                    
+            else: #fixed-grips control:
+                # interf_strnenergy = allwk_history.data[frame.frameId][1] - allse_history.data[frame.frameId][1]
+                PIf = (allse_history.data[frame.frameId][1]+interf_strnenergy)
+                if frame.frameId==1: PI_frame.append(PIf)
+                else:   PI_frame.append(PIf)
+                
+                Uel_frame.append(allwk_history.data[frame.frameId][1])
+                if frame.frameId<=1:
+                    if frame.frameId==1 and PI_frame[0]!=float(0):
+                        delPI=PI_frame[-1]-PI_frame[0]
+                    else: delPI = float(0); delR = float(0)
+                    # else: delPI=PIf-PI0
+                elif frame.frameId>1 and PI_frame[0]!=float(0):
+                    delPI=PI_frame[-1]-PI_frame[0]
+                elif frame.frameId>1 and PI_frame[0]==float(0):
+                    delPI=PIf-PI0
+                energy_data.append([frame.frameId, PI_frame[-1], allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm,
+                                    sum(tforce_field), ut_value])
             
             # The .data attribute for these objects is a tuple, e.g., (time, value)
             # We are interested in the value, which is at index 1.
-            if frame.frameId<1: 
+            if frame.frameId<=1: 
+                # interf_strnenergy = allwk_history.data[frame.frameId][1] - allse_history.data[frame.frameId][1]
                 allwk0 = 1*allwk_history.data[frame.frameId][1]
                 allse0 = allse_history.data[frame.frameId][1]
                 if control==1:
-                    totalPot0 = -(allse0+interf_strnenergy)
+                    totalPot0 = (allwk0) - (totalf_field*ut_value)
+                    # totalPot0 = -0.5*(wpot)
                 else:
-                    totalPot0 = allse0+interf_strnenergy
+                    totalPot0 = allwk0
                 
                 # Append the extracted data as a list to our main list
-                energy_data.append([frame.frameId, totalPot0, allse0, 0.0, deltaR_frame[0], 0.0, area_stressc, area_ccffm])
-                energy_data2.append([frame.frameId, totalPot0, interf_strnenergy, allse0, 0.0, deltaR_frame[0], 0.0, area_stressc, area_ccffm])
-            else:        
-                allwk_value = 1*allwk_history.data[frame.frameId][1]
-                allse_value = allse_history.data[frame.frameId][1]
-                if control==1:
-                    totalPotenergy = -(allse_value+interf_strnenergy)
-                else:
-                    totalPotenergy = allse_value+interf_strnenergy
+                # energy_data.append([frame.frameId, totalPot0, allse0, delPI, deltaR_frame[frame.frameId], 0.0, area_stressc, area_ccffm])
+                # print(frame.frameId,totalPot0,atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
+            # else:
+            #     ut_field=currentFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+            #     ut_value=abs(ut_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data)
+            #     # concentrated force extraction:
+            #     tforce=currentFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+            #     tforce_field = [fv.data for fv in tforce.getSubset(region=dcbtoparm,position=NODAL).values]
+            #     totalf_field = 2*abs(sum(tforce_field))
                 
-                delPI=totalPotenergy-PI_frame[1]
-                delR=deltaR_frame[-1]
+            #     allwk_value = 1*allwk_history.data[frame.frameId][1]
+            #     allse_value = allse_history.data[frame.frameId][1]
+            #     
+            
+                # print(frame.frameId, totalf_field, ut_value, PI_frame[-1], delPI)
                 # Append the extracted data as a list
-                energy_data.append([frame.frameId, totalPotenergy+delR, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
-                energy_data2.append([frame.frameId, totalPotenergy+delR, interf_strnenergy, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
-            # print(frame.frameId,totalPotenergy,atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
+                # energy_data.append([frame.frameId, PI_frame[-1], allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
+                # print(frame.frameId,PI_frame[-1],atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
         # save the numpy energy evolution as a .txt file:
-        tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e']
-        tbl2_format=['%d', '%.10e', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e']
+        tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e', '%.8e', '%.8e']
         np.savetxt(name_files+'_delPIdelRevol.txt', np.array(energy_data), delimiter='\t', fmt=tbl_format)
-        np.savetxt(name_files+'_delPIdelRevol2.txt', np.array(energy_data2), delimiter='\t', fmt=tbl2_format)
-        print('Total energy evolution array:')
-        print(np.array(energy_data))
+        # print('Total energy evolution array:')
+        # print(np.array(energy_data))
     import displayGroupOdbToolset as dgo
     # Get the viewport
     viewport = session.viewports[session.currentViewportName]
@@ -528,5 +643,5 @@ def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
         fileName=str(name_files)+'.png', 
         format=PNG, canvasObjects=(session.viewports['Viewport: 1'], ))
     odb.close()
-    return energy_data[-1][1],interf_strnenergy,NeL2damageK,NeL2damagetotal,dcbtf2_field,energy_data
+    return energy_data[-1][5],interf_strnenergy,NeL2damageK,NeL2damagetotal,dcbtf2_field,energy_data
    
