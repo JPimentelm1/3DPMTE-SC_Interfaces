@@ -7,7 +7,7 @@ Created on Mon Jul 10 15:12:59 2023
         implementation (uinter), Python's subprocess module for abaqus job cluster
         execution, jobs parallelization approach.
 """
-
+from __future__ import print_function
 from os import chdir, path, mkdir, getcwd, remove
 import os
 from shutil import rmtree, move,copy
@@ -22,9 +22,10 @@ import collections
 import pickle
 import numpy as np
 import math as mth
+import stat
 # Redirect stdout to the command prompt
 sys.stdout = sys.__stdout__
-import PMTESCabaqus
+import PMTESCabaqusV0
 
 from abaqus import *
 from abaqusConstants import *
@@ -87,10 +88,20 @@ def model_outputfile(actual_directory,sim_file,K,Dn,newload,TF,enerHtotalN1,suma
     outfile=open(actual_directory+'/'+sim_file,'a')
     outfile.write(str('%d\t %d\t %.8e\t %.8e\t %.8e\t %.8e\t %d\t'%(K,Dn,newload,TF,enerHtotalN1,sumaenerinterN1,lNeL2damageKN1)))
     outfile.write(str('%d\t'%(lNeL2damagetotal)))
-    outfile.write(str('%d\t %.8e\t' %(energy_evol[-1][0],energy_evol[-1][-3]))+'\n')
+    outfile.write(str('%d\t %.8e\t' %(energy_evol[-1][0],energy_evol[-1][5]))+'\n')
     
     outfile.close()
 
+def KDn_outputfile(actual_directory,dirname,K,Dn,enerHtotalN,interf_energy,NeL2damagekn,tf,energy_evol):
+    chdir(actual_directory)
+    outfile=open(actual_directory+'/'+dirname+'/'+'KDn_recordfile.txt','a')
+    for kinc in range(1,len(energy_evol)):
+        outfile.write(str('%d\t %d\t %d\t %.8e\t %.8e\t %d\t'%(K,Dn,energy_evol[kinc][0],tf,interf_energy,NeL2damagekn)))
+        outfile.write(str('%.8e\t %.8e\t' %(energy_evol[kinc][-2],energy_evol[kinc][-1])))
+        outfile.write(str('%.8e\t %.8e\t %.8e\t %.8e\t' %(energy_evol[kinc][1],energy_evol[kinc][5],
+                                                          energy_evol[kinc][6],energy_evol[kinc][7]))+'\n')
+    outfile.close()
+    
 def add_urdfill_output(input_file_path):
     """
     Finds the '** OUTPUT REQUESTS' header in an Abaqus input file and
@@ -196,7 +207,180 @@ def modify_amplitude_data(input_file_path, new_load):
         "Error: The file at '{}' could not be found.".format(input_file_path)
     except Exception as e:
         "An unexpected error occurred: {}".format(e)
+
+def modify_amplitude_dataV2(input_file_path, new_load, new_load_p1):
+    """
+    Finds the '*Amplitude, name=AMP-1' header in an Abaqus input file
+    and replaces the data on the immediately following line. (Python 2.7 compatible)
+    
+    The search logic has been enhanced to find the header even if it's prefixed by
+    other text or keywords on the same line.
+
+    Args:
+        input_file_path: The full path to the Abaqus input file (.inp).
+        new_load: The float value for the amplitude at time 0.
+        new_load_p1: The float value for the amplitude at time 1.
+    """
+    # The header string to search for, cleaned of spaces for a robust check
+    target_header_clean = "*AMPLITUDE,NAME=AMP-1"
+
+    # Input validation remains
+    if not all(isinstance(v, (int, float)) for v in [new_load, new_load_p1]):
+        print("Error: 'new_load' and 'new_load_p1' must be numeric values.")
+        return
+
+    try:
+        with open(input_file_path, 'r') as file:
+            lines = file.readlines()
+
+        line_to_replace_index = -1
+        # --- CORRECTION APPLIED HERE ---
+        for i, line in enumerate(lines):
+            # Clean up the line: uppercase, remove all spaces, remove leading/trailing whitespace
+            cleaned_line_for_search = line.strip().upper().replace(" ", "")
+
+            # Check if the target string is contained anywhere in the cleaned line
+            if target_header_clean in cleaned_line_for_search:
+                # The target is the line *after* the header
+                line_to_replace_index = i + 1
+                break
+        # --------------------------------
+
+        if line_to_replace_index != -1 and line_to_replace_index < len(lines):
+            # Format the new data line using .format()
+            new_data_line = " 0., {0}, 1., {1}\n".format(new_load, new_load_p1)
+            
+            lines[line_to_replace_index] = new_data_line
+
+            with open(input_file_path, 'w') as file:
+                file.writelines(lines)
+            print("Success: Amplitude 'AMP-1' in '{0}' was updated.".format(input_file_path))
+        else:
+            print("Warning: Header '{0}' not found. File was not modified.".format(target_header_clean))
+
+    except IOError:
+        print("Error: The file at '{0}' could not be found.".format(input_file_path))
+    except Exception as e:
+        print("An unexpected error occurred: {0}".format(e))
+
+# restart input file function definition:
+def create_crack_restart_inp(file_name, n, displacement_mag):
+    """
+    Generates an Abaqus restart .inp file for crack propagation step 'n'.
+    
+    Args:
+        file_name (str): Name of the new .inp file (without extension).
+        n (int): The current loop iterator (step number). Starts at 2.
+        displacement_mag (float): The target displacement value for this step 
+        (e.g., 0.0395).
+    """
+    
+    # Calculate the step to read from
+    prev_step = n - 1
+    
+    # Create unique names for this iteration to avoid conflicts
+    amp_name = "AMP-BIS-{}".format(n)
+    step_name = "Step-{}".format(n)
+    
+    full_filename = file_name + '.inp'
+    
+    print ("Writing restart file: {}".format(full_filename))
+    
+    with open(full_filename, 'w') as f:
+        # --- HEADER ---
+        f.write("*HEADING\n")
+        f.write("Crack Propagation Restart - Step {}, applied load={}\n".format(n, displacement_mag))
         
+        # --- RESTART READ ---
+        # The 'END STEP' is crucial here to reset KINC to 1
+        f.write("*RESTART, READ, STEP={}, END STEP\n".format(prev_step))
+        
+        # --- AMPLITUDE DEFINITION ---
+        # We define a NEW amplitude for this specific step.
+        # Format: Time, Value, Time, Value
+        # This creates a constant hold at 'displacement_mag' across the step (0.0 to 1.0)
+        f.write("**\n")
+        f.write("** New Amplitude for Step {}\n".format(n))
+        f.write("*AMPLITUDE, NAME={}\n".format(amp_name))
+        f.write("0.0, {}, 1.0, {}\n".format(displacement_mag, displacement_mag))
+        
+        # --- STEP DEFINITION ---
+        f.write("**\n")
+        f.write("** STEP: {}\n".format(step_name))
+        f.write("**\n")
+        f.write("*Step, name={}, nlgeom=NO, inc=25, unsymm=NO\n".format(step_name))
+        f.write("*Static, direct\n")
+        f.write("0.04, 1., \n")
+        
+        # --- BOUNDARY CONDITIONS ---
+        f.write("**\n")
+        f.write("** BOUNDARY CONDITIONS\n")
+        f.write("**\n")
+        # Apply Positive Displacement to TOPN
+        f.write("** Name: Disp-BC-5 Type: Displacement/Rotation\n")
+        f.write("*Boundary, amplitude={}\n".format(amp_name))
+        f.write("TOPN, 2, 2, 1.\n")
+        
+        # Apply Negative Displacement to BOTN
+        f.write("** Name: Disp-BC-6 Type: Displacement/Rotation\n")
+        f.write("*Boundary, amplitude={}\n".format(amp_name))
+        f.write("BOTN, 2, 2, -1.\n")
+        
+        # --- OUTPUT REQUESTS ---
+        f.write("**\n")
+        f.write("** OUTPUT REQUESTS\n")
+        f.write("** This block is for the URDFIL subroutine\n")
+        f.write("*ENERGY FILE, FREQUENCY=1\n")
+        
+        # Important: Write restart for the NEXT loop iteration
+        f.write("*Restart, write, frequency=1\n")
+        
+        f.write("**\n")
+        f.write("** FIELD OUTPUT: F-Output-1\n")
+        f.write("**\n")
+        f.write("*Output, field\n")
+        f.write("*Node Output, nset=INITIALFRONT\n")
+        f.write("COORD, \n")
+        
+        f.write("**\n")
+        f.write("** FIELD OUTPUT: F-Output-2\n")
+        f.write("**\n")
+        f.write("*Contact Output, nset=\"TOP ARM-1\"\n")
+        f.write("CDISP, CSTRESS, SDV\n")
+        
+        f.write("**\n")
+        f.write("** FIELD OUTPUT: F-Output-3\n")
+        f.write("**\n")
+        f.write("*Element Output, elset=\"TOP ARM-1\", directions=NO\n")
+        f.write("SDV, \n")
+        
+        f.write("**\n")
+        f.write("** FIELD OUTPUT: F-Output-4\n")
+        f.write("**\n")
+        f.write("*Node Output, nset=\"TOP ARM-1\"\n")
+        f.write("U, \n")
+        
+        f.write("**\n")
+        f.write("** FIELD OUTPUT: F-Output-5\n")
+        f.write("**\n")
+        f.write("*Node Output, nset=TOPN\n")
+        f.write("CF, TF, UT\n")
+        
+        f.write("**\n")
+        f.write("** HISTORY OUTPUT: H-Output-1\n")
+        f.write("**\n")
+        f.write("*Output, history\n")
+        f.write("*Energy Output\n")
+        f.write("ALLIE, ALLSE, ALLWK\n")
+        
+        f.write("**\n")
+        f.write("** HISTORY OUTPUT: H-Output-2\n")
+        f.write("**\n")
+        f.write("*Node Output, nset=TOPN\n")
+        f.write("CF2, TF2, U2\n")
+        
+        f.write("*End Step\n")
+    return full_filename           
 #%% datos de entrada
 call('cls',shell=True)
 actual_directory = os.getcwd()
@@ -208,7 +392,7 @@ list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
 borrar_archivos(list_delete)
 
 # force (1) or displacement (0) control:
-control=1
+control=0
 # initial load increment:
 incr=1
 factorcarga=1.0
@@ -218,25 +402,31 @@ cargainicial=1
 # initial step:
 k=1
 # Bisection algorithm stop tolerance
-bisectol=1.0E-3
+bisectol=10.0E-3
+# Crack advance bisection tolerance
+bisectol2=float(2)*bisectol
 # Initial bisection tolerance
 eps0=1
 # Bisection iteration counter
 bisect_itercnt=1
 # Bisection limit of iterations
 numiter=50
+# Bisection scheme: full (1) or crack onset only (0)
+bis_option=1
 #
 Nmin = round(-mth.log10(bisectol)/mth.log10(2))
 
-nameinp='DCBuinter_L237m1'
-UINTER_lst=['UINTERLEBIM3D_kincxit.f','UINTERLEBIMAMA3D.for']
+nameinp='DCBuinter_L237m0_Uctrl'
+UINTER_lst=['UINTERLEBIM3D_kincxit.for','UINTERLEBIMAMA3D.for']
 # nameUMAT=UINTER_lst[0]
 nameSUBR=UINTER_lst[0]
 amplname='AMP-1'
 godb=1  #si quiero guardar todos los odb pongo 1, si no 0
 #definicion de mi uinter para cambiar
 cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=9\n','\n']
-cadenasUinterN=[300.,600.,600.,0.09375,0.0,0.0,8.]
+kn = 300; kt = kn*1
+
+cadenasUinterN=[kn,kt,kt,0.09375,0.0,0.0,8.]
 
 # 11 starting damage configurations:
 cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+", "+str(control)+'\n']))]
@@ -252,11 +442,10 @@ cadenasUinterN10=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1
 cadenasUinterN11=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(11)+", "+str(control)+'\n']))]
 
 Uinterprops=[cadenasUinterN1,cadenasUinterN11]    
-
 cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
 # cadenanombreSDV='ASSEMBLY_VIGA_INF_SUPER_SUP/ASSEMBLY_VIGA_SUP_SUPER_INF'
 cadenanombreSDV='ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF'
-Dirname='AdaptiveF_ODBs-'+nameinp+'_knn'+str(cadenasUinterN[0])+'_mu'+str(cadenasUinterN[-1])
+Dirname='AdaptiveF_ODBs-'+nameinp+'_knn'+str(cadenasUinterN[0])+'_mu'+str(cadenasUinterN[-1])+'Ctrl'+str(control)+'-Bisopt'+str(bis_option)
 
 ##para cluster
 #cpus=10
@@ -274,8 +463,6 @@ if (path.exists(Dirname) == True):
 if godb==1:
     mkdir(Dirname)
 sim_file=Dirname+'/stepdata.txt'
-# simfile_obj=open(sim_file,'w')  
-# simfile_obj.close()
 
 nameodbcargainicial=nameinp+'-carga-inicial'
 shutil.copy(nameinp+'.inp',nameodbcargainicial+'.inp')
@@ -299,6 +486,7 @@ try:
     os.remove(signalFile)
 except OSError:
     pass
+# sys.exit()
 
 myJob = mdb.JobFromInputFile(name=nameodbcargainicial, 
         inputFileName=nameodbcargainicial, type=ANALYSIS, 
@@ -316,7 +504,7 @@ jobName = myJob.name
 # The command to run Abaqus from the command line
 # 'interactive' tells Abaqus to run the job and then exit.
 # Define the absolute path to the executable
-abaqus_executable = '/opt/abaqus/Commands/abq2022'
+abaqus_executable = r'C:\SIMULIA\Abaqus\6.14-1\code\bin\abq6141.exe'
 
 # Populate the template with all necessary variables
 # Build a list of command arguments
@@ -339,9 +527,9 @@ except OSError:
 # subprocess.Popen launches the command in a new process
 # and the script immediately continues to the next line.
 process = subprocess.Popen(command, cwd=actual_directory)
-print("--- Now entering monitoring loop... ---")
 
 # --- 3. MONITOR THE JOB (POLLING LOOP) ---
+print("--- Entering monitoring loop... ---")
 # The 'process.poll()' method checks if the subprocess has terminated.
 # It returns 'None' if it's still running.
 while process.poll() is None:
@@ -364,7 +552,7 @@ if os.path.exists(signalFile):
     
 ###obtener la nueva carga del odb
 print(nameodbcargainicial, cargainicial, cadenanombreSDV)
-newload = PMTESCabaqus.PMTESCcriTen_carga(nameodbcargainicial, cargainicial, cadenanombreSDV)
+newload = PMTESCabaqusV0.PMTESCcriTen_carga(nameodbcargainicial, cargainicial, cadenanombreSDV)
 # 
 newload=(newload*factorcarga)
 print('Applied load: ',float(newload))
@@ -407,7 +595,6 @@ stepdata=[]
 #%% LOAD BISECTION ALGORITHM STARTS HERE
 
 while (k<=numiter):
-    
     # nameinpK=nameinp+str(1)
     # shutil.copy(nameinp+'.inp',nameinpK+'.inp')
     #%% 
@@ -444,7 +631,7 @@ while (k<=numiter):
         replacement(nameinpDNk+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
         # replacement(nameinpN2k+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
         
-        
+    
     Joblist=[]
     processlist=[]    
     # ***ABAQUS JOB PARALLELIZATION APPROACH:***
@@ -481,7 +668,7 @@ while (k<=numiter):
             explicitPrecision=SINGLE, nodalOutputPrecision=SINGLE, userSubroutine=nameSUBR, 
             scratch='', parallelizationMethodExplicit=DOMAIN, numDomains=cpus, 
             activateLoadBalancing=False, multiprocessingMode=DEFAULT, numCpus=cpus)
-        Joblist.append(myJobN)
+        
         
         myJobN.setValues(
         scratch=work_dir,
@@ -490,13 +677,14 @@ while (k<=numiter):
         numDomains=1,        # Disable domain decomposition
         multiprocessingMode=DEFAULT)
         
+        Joblist.append(myJobN)
         chdir(work_dir)
         # Create a copy of the current environment
         # job_env = os.environ.copy()
         # Set the ABAQUS_SCRATCH variable for this specific job
         # job_env["ABAQUS_SCRATCH"] = work_dir
         
-        abaqus_executable = '/opt/abaqus/Commands/abq2022'
+        abaqus_executable = r'C:\SIMULIA\Abaqus\6.14-1\code\bin\abq6141.exe'
 
         # Populate the template with all necessary variables
         # Build a list of command arguments
@@ -530,14 +718,6 @@ while (k<=numiter):
     # =================================================================
     # WAITING LOOP: Wait for all jobs to complete
     # =================================================================
-    # last_job_in_list = Joblist[-1]
-    # last_job_name = last_job_in_list.name
-    # # NOTE: This path construction MUST match the one used in your submission loop.
-    # last_job_work_dir = os.path.join(os.getcwd(), last_job_name + '_scratch')
-    # expected_odb_path = os.path.join(last_job_work_dir, last_job_name + '.odb')
-    # print('The script will proceed after this file is created: {}'.format(expected_odb_path))
-    
-    # 2. WAITING LOOP: This part remains the same
     print('\n--- All jobs submitted. Waiting for completion... ---')
     # --- LOOP 2: WAIT FOR JOBS TO FINISH ---
     # This loop will pause the script until every job is done.
@@ -556,19 +736,65 @@ while (k<=numiter):
         # work_dir = os.path.join(base_dir, job_name)
         work_dir = os.path.join(actual_directory, os.path.basename(job_name + '_scratch'))
         chdir(work_dir)
-        # List of file extensions to delete
-        extensions_to_delete = ['*.inp','*.dat', '*.sim', '*.prt', '*.com', '*.jnl',\
-                        '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.res','*.mdl','*.stt','*.for','*.f','*.fil']
-        
-        for ext in extensions_to_delete:
-            # glob.glob finds all files matching the pattern
-            files_to_remove = glob.glob(ext)
-            for f in files_to_remove:
-                try:
-                    os.remove(f)
-                    "  - Deleted: {}".format(f)
-                except OSError as e:
-                    "  - Error deleting file {}: {}".format(f, e)
+        if k > 1:
+            steps_data=np.load(actual_directory+'\sim_file.npy')
+            # print(steps_data)
+            kstepindx=-1
+            km1stepindx=np.where(steps_data[:,0] == k-1)[0][-1]
+            Fk = stepdata[kstepindx][1]
+            Fkm1 = stepdata[km1stepindx][1]
+            incre = Fk-Fkm1
+            eps0 = abs(incre)/abs(Fk)
+            NeL2damagek=stepdata[kstepindx][5]
+            # NeL2damagekm1=stepdata[km1stepindx][5]
+            if eps0<bisectol and NeL2damagek>0 and stepdata[-1][-1]<0:
+                eps0file = open(work_dir+'\eps0_value.txt', 'w')
+                eps0file.write(str(float(1)))
+                eps0file.close()
+                
+                # List of file extensions to delete
+                extensions_to_delete = ['*.sim', '*.com', '*.jnl',\
+                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc']
+                for ext in extensions_to_delete:
+                    # glob.glob finds all files matching the pattern
+                    files_to_remove = glob.glob(ext)
+                    for f in files_to_remove:
+                        try:
+                            os.remove(f)
+                            "  - Deleted: {}".format(f)
+                        except OSError as e:
+                            "  - Error deleting file {}: {}".format(f, e)
+            else:
+                eps0file = open(work_dir+'\eps0_value.txt', 'w')
+                eps0file.write(str(float(0)))
+                eps0file.close()
+                # List of file extensions to delete
+                extensions_to_delete = ['*.inp','*.dat', '*.sim', '*.com', '*.jnl',\
+                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.for','*.f','*.fil']
+                
+                for ext in extensions_to_delete:
+                    # glob.glob finds all files matching the pattern
+                    files_to_remove = glob.glob(ext)
+                    for f in files_to_remove:
+                        try:
+                            os.remove(f)
+                            "  - Deleted: {}".format(f)
+                        except OSError as e:
+                            "  - Error deleting file {}: {}".format(f, e)
+        elif k==1:
+            # List of file extensions to delete
+            extensions_to_delete = ['*.inp','*.dat', '*.sim', '*.prt', '*.com', '*.jnl',\
+                            '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.res','*.mdl','*.stt','*.for','*.f','*.fil']
+            
+            for ext in extensions_to_delete:
+                # glob.glob finds all files matching the pattern
+                files_to_remove = glob.glob(ext)
+                for f in files_to_remove:
+                    try:
+                        os.remove(f)
+                        "  - Deleted: {}".format(f)
+                    except OSError as e:
+                        "  - Error deleting file {}: {}".format(f, e)
         # return to the parent, main script directory:
         chdir(actual_directory)
     
@@ -704,39 +930,42 @@ while (k<=numiter):
         work_dirodb=actual_directory+'//'+job_name + '_scratch'
         odb_file=work_dirodb+'//'+nameinpDNk
         # ODB Post-processing; simulation data output:
-        enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqus.PMTESCcritEneSubr(odb_file,control,cadenanombreSDV,work_dirodb)
+        enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(odb_file,control,cadenanombreSDV,work_dirodb)
+        KDn_outputfile(actual_directory,Dirname,k,Dn,enerHtotalN,sumaenerinterN,len(NeL2damageKN),tf,energy_evol)
         model_outputfile(actual_directory,sim_file,k,Dn,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
         Pmtesc_postp.append([enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,nameinpDNk])
         datos_salida.append([k,Dn,float(newload),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),nameinpDNk,len(NeL2damagetotalN)])
-        print([k,Dn,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),nameinpDNk,energy_evol[-1][-1]]) 
+        # print([k,Dn,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),nameinpDNk,energy_evol[-1][5]]) 
         # move the job directory to the parent script directory:
         # shutil.move(work_dir, Dirname)
         
-    #%% Algorithm flow control for the ODB file with minimum total energi PI+DeltaR:
-    MinPIpDeltaR=min(row[0] for row in Pmtesc_postp); print(MinPIpDeltaR)
+    #%% Algorithm flow control for the ODB file with minimum total energy PI+DeltaR:
+    MindelPIpDeltaR=min(row[0] for row in Pmtesc_postp); print(MindelPIpDeltaR)
     min_row = min(Pmtesc_postp, key=lambda x:x[0])
-    for row in range(len(Pmtesc_postp)):
-        if len(Pmtesc_postp[row][2])>0.0 and Pmtesc_postp[row][0]<=min_row[0]:
-                odbdef=Pmtesc_postp[row][-1]
-                NeL2damage=Pmtesc_postp[row][2]
-                NeL2damagetotal=Pmtesc_postp[row][3]
-                job_name = '{}'.format(odbdef)
+    max_row = max(Pmtesc_postp, key=lambda x:x[0])
+    indx = min(enumerate(Pmtesc_postp), key=lambda x:x[1][0])[0]
+    # for row in range(len(Pmtesc_postp)):
+    #     if len(Pmtesc_postp[row][2])>0.0 and Pmtesc_postp[row][0]<=min_row[0]:
+    odbdef=Pmtesc_postp[indx][-1]
+    NeL2damage=Pmtesc_postp[indx][2]
+    NeL2damagetotal=Pmtesc_postp[indx][3]
+    job_name = '{}'.format(odbdef)
         
-        else:
-            if len(Pmtesc_postp[row][2])==0.0:
-                # 
-                odbdef=Pmtesc_postp[row][-1]
-                NeL2damage=Pmtesc_postp[row][2]
-                NeL2damagetotal=Pmtesc_postp[row][3]							 
-                job_name = '{}'.format(odbdef)
+        # elif (max_row>=min_row) and len(Pmtesc_postp[row][2])==0.0:
+        #     # if len(Pmtesc_postp[row][2])==0.0:
+        #     # 
+        #     odbdef=Pmtesc_postp[row][-1]
+        #     NeL2damage=Pmtesc_postp[row][2]
+        #     NeL2damagetotal=Pmtesc_postp[row][3]							 
+        #     job_name = '{}'.format(odbdef)
     print(odbdef, len(NeL2damage))
     work_dirodb=Dirname+'//'+job_name + '_scratch'
     odb_file=job_name +'_scratch'+'//'+odbdef
-    enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqus.PMTESCcritEneSubr(odb_file,control,cadenanombreSDV,work_dirodb)
+    enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(odb_file,control,cadenanombreSDV,work_dirodb)
     model_outputfile(actual_directory,sim_file,k,Dn,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
     datos_salida.append([float(newload),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),odbdef,len(NeL2damagetotalN)])
     
-    stepdata.append([k,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][-3]])
+    stepdata.append([k,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][5]])
     sim_filenp=np.array(stepdata)
     np.save('sim_file.npy', sim_filenp)
     
@@ -765,7 +994,7 @@ while (k<=numiter):
         list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                        '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
         borrar_archivos(list_delete)
-        
+    
     else:
         steps_data=np.load('sim_file.npy')
         print(steps_data)
@@ -856,21 +1085,1017 @@ while (k<=numiter):
             borrar_archivos(list_delete)
             
         elif k>2 and NeL2damagek!=0 and stepdata[-1][-1]<0 and eps0<bisectol and k<=numiter:
-            print(k, Fk, tf, eps0, NeL2damagek)
-            if godb==1:
-                list_odbs=(['*_K'+str(k-1)+'.odb','*_K'+str(k-1)+'.inp','*_K'+str(k)+'.inp',
-                            '*_K'+str(k)+'.sta','*_K'+str(k-1)+'.sta'])
-                mover_archivos(list_odbs,Dirname)
-            #borramos el resto de archivos de ese paso                                          
-            list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
-                           '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
-            borrar_archivos(list_delete)                                    
-            chdir(actual_directory)
-            end = time.time()
-            print('Simulation has terminated in %.2f' %((end-start)/60)+' min')
-            sys.exit()
+            print(k, Fk, tf, eps0, NeL2damagek, job_name +'_scratch'+'//'+odbdef)
+            work_dirodb=Dirname+'//'+job_name + '_scratch'
+            odb_file=job_name +'_scratch'+'//'+odbdef
+            work_dir = os.path.join(actual_directory, os.path.basename(job_name + '_scratch'))
+            shutil.copy(nameinp+'.inp', work_dir)
+            shutil.copy(nameSUBR, work_dir)
+            
+            if control==0:
+                # CRACK PROPAGATION AND ARREST STAGE: displacement control
+                # -------------------------------------------------------------
+                # -------------------------------
+                # CRACK ADVANCES WITH BISECTION
+                # -------------------------------
+                if bis_option==1:
+                # commands that copy the winner input file and create/launch restart
+                # analysis files
+                    
+                    # name of the Abaqus worker script
+                    worker_script = 'runrestart_job.bat' 
+                    # define the new .inp and directory name
+                    nameinp_k_mas_1=odbdef+'_crackprop'+'_m'+str(1)
+                    work_dirkm = os.path.join(actual_directory, 
+                                 os.path.basename(odbdef+'_crackprop'+'_m'+str(0) + '_scratch'))
+                    # create a new crack propagation working directory
+                    os.mkdir(work_dirkm)
+                    # copy the worker script into the new work directory
+                    shutil.copy(worker_script, work_dirkm)
+                    
+                    # files we need to export
+                    inp_file = os.path.join(odbdef + '.inp')
+                    mdl_file = os.path.join(work_dir+'\\'+odbdef + '.mdl')
+                    prt_file = os.path.join(work_dir+'\\'+odbdef + '.prt')
+                    res_file = os.path.join(work_dir+'\\'+odbdef + '.res')
+                    odb_file = os.path.join(work_dir+'\\'+odbdef + '.odb')
+                    stt_file = os.path.join(work_dir+'\\'+odbdef + '.stt')
+                    export_fil = [mdl_file,prt_file,odb_file,nameSUBR,nameinp+'.inp',
+                                  res_file,stt_file,common_file]
+                    # export the files into the new directory
+                    for f in export_fil:
+                        shutil.copy(f, work_dirkm)
+                    """
+                    # *************************************************************************
+                    # NOTE: for any crack propagation step inside the loop, the load amplitude
+                    # values must be the same across all increments of the step, i.e.,
+                    # ((0,value),(1.0,value)), consistent with crack initiation steps,
+                    # which will enable a most precise crack advance load prediction;
+                    # should be invariant to the bisection algorithm scheme.
+                    # *************************************************************************
+                    """
+                    # load vector preparation:
+                    start = newload + float(0.05*newload)
+                    end = 6.5*newload
+                    num = 25
+                    power = float(2.25) # no bias towards the start
+                    # Create a normalized linear space (0 to 1)
+                    if num == 1:
+                        linear_norm = [start]
+                    else:
+                        linear_norm = [float(i) / (num - 1) for i in range(num)]
+                    # Apply the power and scale
+                    load_vector = [start + (end - start) * (norm_val ** power) for norm_val in linear_norm]
+                    
+                    load_list = []
+                    load_list.append([newload, 0])
+                    numiter_max = 25
+                    newld_iter = load_vector[0] #starting load value
+                    for indx,value in enumerate(load_vector):
+                        # if indx>=4: sys.exit() # provisional termination
+                        advance_iternum = 1
+                        
+                        if indx==0: 
+                            n = 2
+                            # newld_iter = value
+                            inpfil_name = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                            inp_filename = create_crack_restart_inp(inpfil_name, n, newld_iter)
+                            shutil.move(inp_filename, work_dirkm)
+                        else:
+                            n += 1
+                        """
+                        
+                        START OF ADVANCE BISECTION ALGORITHM
+                        
+                        """
+                        chdir(work_dirkm)
+                        
+                        epsb2 = float(1)
+                        
+                        while advance_iternum<numiter_max:
+                            if indx==0 and advance_iternum==1: 
+                                old_load=newload
+                                # load_list.append(newld_iter)
+                                odb_file = odbdef
+                            if indx==0 and advance_iternum>1:
+                                old_load=load_list[-1][0]
+                                # load_list.append(newld_iter)
+                            if indx>0 and advance_iternum==1:
+                                newld_iter=value
+                            
+                            if indx==0: 
+                                oldjob_name = odbdef
+                            else: oldjob_name = odb_file
+                            
+                            # Define extensions generated by Abaqus
+                            # extensions_to_clean = ['.odb', '.lck', '.com', '.dat', '.msg', '.sta', '.prt', '.res', '.mdl', '.stt']
+                            # print ("Cleaning up old attempt for: {}".format(inpfil_name))
+                            # for ext in extensions_to_clean:
+                            #     # Construct the full file path
+                            #     file_to_remove = os.path.join(work_dirkm, inpfil_name + ext)
+                                
+                            #     # Remove it if it exists
+                            #     if os.path.exists(file_to_remove):
+                            #         try:
+                            #             os.remove(file_to_remove)
+                            #         except OSError:
+                            #             print ("Warning: Could not remove locked file: {}".format(file_to_remove))
+                                        
+                            print("START OF ADVANCE BISECTION ALGORITHM: base job {}".format(oldjob_name))
+                                # oldjob_name is the last converged job after the 
+                                # nucleation bisection algorithm 
+                            # Define files to monitor
+                            lock_file = os.path.join(inpfil_name + '.lck')
+                            # ... (your pre-check to remove old .lck files) ...
+                            # if os.path.exists(lock_file):
+                            #     os.remove(lock_file)
+                                    
+                            # --- THIS IS THE MODIFIED PART ---
+                            # Call the .bat file and pass the job_name as an argument
+                            command = [
+                                worker_script,
+                                inpfil_name, # current job name
+                                oldjob_name, # restart base analysis
+                                work_dirkm # work directory argument
+                            ]
+                            
+                            print("Submitting job via Worker .bat file...")
+                            # We use .call() because the .bat file is fast
+                            # and will exit as soon as the job is submitted.
+                            subprocess.call(command, cwd=work_dirkm)
+                            # --- Rest of your script ---
+                            
+                            # 1. Wait for the job to start
+                            # print ("Waiting for job to start (for .lck file)...")
+                            # time_to_start = 0
+                            # ... (rest of your .lck polling logic) ...
+                            # while not os.path.exists(lock_file):
+                            #     time.sleep(1)
+                                # ... (etc) ...
+                            
+                            # 2. Wait for the job to finish
+                            # print ("Job is running. Polling {}.lck...".format(inpfil_name))
+                            # while os.path.exists(lock_file):
+                            #     time.sleep(10)
+                            print ("--- Iteration {} complete. ---".format(inpfil_name))
+                            chdir(work_dirkm)
+                            enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(inpfil_name,control,cadenanombreSDV,work_dirkm)
+                            if indx==0 and advance_iternum==1: epsb2=1.0
+                            elif indx==0 and advance_iternum!=1: epsb2=abs(newld_iter-old_load)/abs(newld_iter)
+                            elif indx>0:
+                                epsb2=abs(newld_iter-old_load)/abs(newld_iter)
+
+                            print(indx,advance_iternum,epsb2,enerHtotalN,len(NeL2damageKN),len(NeL2damagetotalN),newld_iter,old_load)
+                            # model_outputfile(actual_directory,sim_file,k,Dn,newload,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
+                            
+                            if len(NeL2damageKN)>0 and epsb2>bisectol2:
+                                print('CRACK ADVANCES, WITH epsb2 {}> bisectol2 {}'.format(epsb2,bisectol2))
+                                advance_iternum += 1
+                                load_list.append([newld_iter, 1])
+                                last_row = next((row for row in reversed(load_list) if row[1] == 0), None)
+                                old_load=last_row[0]
+                                chdir(actual_directory)
+                                newld_iter=newld_iter - 0.5*abs(newld_iter-old_load)
+                                inpfil_name = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                                inp_filename = create_crack_restart_inp(inpfil_name, n, newld_iter)
+                                # odb_file = inpfil_name
+                                shutil.move(inp_filename, work_dirkm)
+                                
+                                chdir(work_dirkm)
+                                
+                                # List of file extensions to delete
+                                extensions_to_delete = ['*.dat', '*.sim', '*.com', '*.jnl'\
+                                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil']
+                                for ext in extensions_to_delete:
+                                    # glob.glob finds all files matching the pattern
+                                    files_to_remove = glob.glob(ext)
+                                    for f in files_to_remove:
+                                        try:
+                                            os.remove(f)
+                                            "  - Deleted: {}".format(f)
+                                        except OSError as e:
+                                            "  - Error deleting file {}: {}".format(f, e)
+                                chdir(actual_directory)
+                            if len(NeL2damageKN)==0 and epsb2>bisectol2:
+                                print('NO CRACK ADVANCE, WITH epsb2 {}> bisectol2 {}'.format(epsb2,bisectol2))
+                                advance_iternum += 1
+                                load_list.append([newld_iter, 0])
+                                last_row = next((row for row in reversed(load_list) if row[1] == 1), None)
+                                if last_row==None:
+                                    last_row=next((row for row in reversed(load_list) if row[1] == 0), None)
+                                old_load=last_row[0]
+                                chdir(actual_directory)
+                                newld_iter=old_load + 1.5*abs(newld_iter-old_load)
+                                
+                                inpfil_name = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                                inp_filename = create_crack_restart_inp(inpfil_name, n, newld_iter)
+                                # odb_file = inpfil_name
+                                shutil.move(inp_filename, work_dirkm)
+                                
+                                chdir(work_dirkm)
+                                # List of file extensions to delete
+                                extensions_to_delete = ['*.dat', '*.sim', '*.com', '*.jnl'\
+                                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil']
+                                for ext in extensions_to_delete:
+                                    # glob.glob finds all files matching the pattern
+                                    files_to_remove = glob.glob(ext)
+                                    for f in files_to_remove:
+                                        try:
+                                            os.remove(f)
+                                            "  - Deleted: {}".format(f)
+                                        except OSError as e:
+                                            "  - Error deleting file {}: {}".format(f, e)
+                                chdir(actual_directory)
+                            if len(NeL2damageKN)==0 and epsb2<bisectol2:
+                                print('NO CRACK ADVANCE, WITH epsb2 {}< bisectol2 {}'.format(epsb2,bisectol2))
+                                advance_iternum += 1
+                                load_list.append([newld_iter, 0])
+                                last_row = next((row for row in reversed(load_list) if row[1] == 1), None)
+                                if last_row==None:
+                                    last_row=next((row for row in reversed(load_list) if row[1] == 0), None)
+                                old_load=last_row[0]
+                                chdir(actual_directory)
+                                newld_iter=old_load + float(1.5)*abs(newld_iter-old_load)
+                                
+                                inpfil_name = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                                inp_filename = create_crack_restart_inp(inpfil_name, n, newld_iter)
+                                # odb_file = inpfil_name
+                                shutil.move(inp_filename, work_dirkm)
+                                
+                                chdir(work_dirkm)
+                                # List of file extensions to delete
+                                extensions_to_delete = ['*.sim', '*.com', '*.jnl'\
+                                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil']
+                                for ext in extensions_to_delete:
+                                    # glob.glob finds all files matching the pattern
+                                    files_to_remove = glob.glob(ext)
+                                    for f in files_to_remove:
+                                        try:
+                                            os.remove(f)
+                                            "  - Deleted: {}".format(f)
+                                        except OSError as e:
+                                            "  - Error deleting file {}: {}".format(f, e)
+                                chdir(actual_directory)
+                            if len(NeL2damageKN)>0  and epsb2<bisectol2:
+                                print('CRACK ADVANCES, WITH epsb2 {}< bisectol2 {}'.format(epsb2,bisectol2))
+                                chdir(actual_directory)
+                                ref_load = newld_iter
+                                load_list.append([newld_iter, 1])
+                                incre = abs(newld_iter-old_load)
+                                newld_iter = newld_iter + 2.0*incre
+                                
+                                inpfil_name = odbdef+'_m'+str(indx+2)+'_bisiter_'+str(1)
+                                inp_filename = create_crack_restart_inp(inpfil_name, n+1, newld_iter)
+                                if os.path.exists(work_dirkm+'\\'+inp_filename):
+                                    print("Input file {} already exists in the work dir".format(inp_filename))
+                                else:
+                                    shutil.move(inp_filename, work_dirkm)
+                                oldjob_base = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                                odb_file = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                                chdir(work_dirkm)
+                                # List of file extensions to delete
+                                extensions_to_delete = ['*.sim', '*.com', '*.jnl'\
+                                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil']
+                                for ext in extensions_to_delete:
+                                    # glob.glob finds all files matching the pattern
+                                    files_to_remove = glob.glob(ext)
+                                    for f in files_to_remove:
+                                        try:
+                                            os.remove(f)
+                                            "  - Deleted: {}".format(f)
+                                        except OSError as e:
+                                            "  - Error deleting file {}: {}".format(f, e)
+                                # advance_iternum += 1
+                                # ADVANCE ITERATION POSTPROCESS
+                                # enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(job_name,control,cadenanombreSDV,work_dirkm)
+                                # model_outputfile(actual_directory,sim_file,k,11,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
+                                # datos_salida.append([float(val),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),job_name,len(NeL2damagetotalN)])
+                                # stepdata.append([k,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][5]])
+                                # KDn_outputfile(actual_directory,Dirname,k,11,enerHtotalN,sumaenerinterN,len(NeL2damageKN),tf,energy_evol)
+                                chdir(actual_directory)
+                                break
+                            
+                            # 
+                            if len(NeL2damageKN)>=0 and advance_iternum==numiter_max:
+                                chdir(work_dirkm)
+                                # List of file extensions to delete
+                                extensions_to_delete = ['*.dat', '*.sim', '*.com', '*.jnl'\
+                                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil']
+                                for ext in extensions_to_delete:
+                                    # glob.glob finds all files matching the pattern
+                                    files_to_remove = glob.glob(ext)
+                                    for f in files_to_remove:
+                                        try:
+                                            os.remove(f)
+                                            "  - Deleted: {}".format(f)
+                                        except OSError as e:
+                                            "  - Error deleting file {}: {}".format(f, e)
+                                chdir(actual_directory)
+                                print("Simulation terminated after {} advance bisection iterations, EXIT".format(advance_iternum))
+                                sys.exit()
+                            
+                            
+                        chdir(actual_directory)
+                        """
+                        END OF ADVANCE BISECTION ALGORITHM
+                        """
+                    os.chdir(work_dirkm)
+                    # List of file extensions to delete
+                    extensions_to_delete = ['*.sim', '*.com', '*.jnl','*.stt','*.prt','*.mdl','*.res','*.msg'\
+                                    '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.for','*.sta']
+                    for ext in extensions_to_delete:
+                        # glob.glob finds all files matching the pattern
+                        files_to_remove = glob.glob(ext)
+                        for f in files_to_remove:
+                            try:
+                                os.remove(f)
+                                "  - Deleted: {}".format(f)
+                            except OSError as e:
+                                "  - Error deleting file {}: {}".format(f, e)
+                    sys.exit()
+                else:
+                    # CRACK ADVANCES WITH PRESCRIBED LOAD INCREMENTS
+                    # This is the name of your NEW Abaqus worker script
+                    worker_script = 'run_job.bat' 
+                    # define the new .inp and directory name
+                    nameinp_k_mas_1=odbdef+'_crackprop'+'_m'+str(1)
+                    work_dirkm = os.path.join(actual_directory, 
+                                 os.path.basename(odbdef+'_crackprop'+'_m'+str(0) + '_scratch'))
+                    # create a new crack propagation working directory
+                    os.mkdir(work_dirkm)
+                    # copy the worker script into the new work directory
+                    shutil.copy(worker_script, work_dirkm)
+                    
+                    # files we need to export
+                    inp_file = os.path.join(odbdef + '.inp')
+                    mdl_file = os.path.join(work_dir+'\\'+odbdef + '.mdl')
+                    prt_file = os.path.join(work_dir+'\\'+odbdef + '.prt')
+                    res_file = os.path.join(work_dir+'\\'+odbdef + '.res')
+                    odb_file = os.path.join(work_dir+'\\'+odbdef + '.odb')
+                    stt_file = os.path.join(work_dir+'\\'+odbdef + '.stt')
+                    export_fil = [mdl_file,prt_file,odb_file,nameSUBR,nameinp+'.inp',
+                                  res_file,stt_file,common_file]
+                    
+                    # export the files into the new directory
+                    for f in export_fil:
+                        shutil.copy(f, work_dirkm)
+                    """
+                    # HERE AFTERWARDS, notice the use of the mdb.models and the
+                    # mdb.models[].InitialState procedures to create the model 
+                    # and load predefined fields for the actual step increment.
+                    """
+                    # copy the original .inp file
+                    copy(nameinp+'.inp', nameinp_k_mas_1+'.inp')
+                    #cargamos el input original de ABAQUS
+                    mdb.ModelFromInputFile(inputFileName=nameinp_k_mas_1+'.inp', name=nameinp_k_mas_1)
+                    #imponemos el estado inicial del job ganador entre las n para que sea el inicio del paso anterior
+                    instancesname=mdb.models[nameinpK].rootAssembly.instances.keys()
+                    instanceslista=[]
+                    
+                    for inst in range(len(instancesname)):
+                        instanceslista.append(mdb.models[nameinpK].rootAssembly.instances[instancesname[inst]])
+                        
+                    mdb.models[nameinpK].InitialState(updateReferenceConfiguration=OFF, fileName=odbdef, 
+                              endStep=LAST_STEP, endIncrement=STEP_END, name='Predefined Field-1', 
+                              createStepName='Initial', instances=tuple(instanceslista))
+                    # cambiamos el nombre del step  
+                    mdb.models[nameinpK].steps.changeKey(fromName='Step-1', toName='Step-'+str(1)+'_m'+str(1))
+                    
+                    cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=9\n','\n']
+                    kn = 300; kt = kn*1
+                    cadenasUinterN=[kn,kt,kt,0.09375,0.0,0.0,8.]
+                    # 11 starting damage configurations:
+                    cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+", "+str(control)+'\n']))]
+                    cadenasUinterN2=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(2)+", "+str(control)+'\n']))]
+                    cadenasUinterN3=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(3)+", "+str(control)+'\n']))]
+                    cadenasUinterN4=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(4)+", "+str(control)+'\n']))]
+                    cadenasUinterN5=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(5)+", "+str(control)+'\n']))]
+                    cadenasUinterN6=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(6)+", "+str(control)+'\n']))]
+                    cadenasUinterN7=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(7)+", "+str(control)+'\n']))]
+                    cadenasUinterN8=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(8)+", "+str(control)+'\n']))]
+                    cadenasUinterN9=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(9)+", "+str(control)+'\n']))]
+                    cadenasUinterN10=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(10)+", "+str(control)+'\n']))]
+                    cadenasUinterN11=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(11)+", "+str(control)+'\n']))]
+    
+                    Uinterprops=[cadenasUinterN1,cadenasUinterN11]    
+                    cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
+                    cadenanombreSDV='ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF'
+                    
+                    #Buscamos uinter='*Surface Interaction'
+                    cadenasCohesivo=lineasdefinteraccion(nameinp_k_mas_1+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
+                    #reemplazamos la primera linea en los dos archivos de inicio
+                    replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[0], cadenasUinter[0])
+                    #reemplazamos la segunda linea en los dos archivos de inicio
+                    replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[1], cadenasUinter[1])
+                    #reemplazamos la tercera linea en los dos archivos de inicio. Esta es distinta
+                    replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[2], cadenasUinterN1[0][:])
+                    #reemplazamos la linea que pide las salida de las superficies de contacto    
+                    cadenaFOcontact=lineasdefinteraccion(nameinp_k_mas_1+'.inp', 'CDISP, CSTRESS,',1)  
+                    replacement(nameinp_k_mas_1+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                    # replacement(nameinp_k_mas_1+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                    
+                    # job preparation:
+                    start = newload + float(0.025*newload)
+                    end = 5.25*newload
+                    num = 45
+                    power = float(1)  # Bias towards the start
+                    # 1. Create a normalized linear space (0 to 1)
+                    if num == 1:
+                        linear_norm = [start]
+                    else:
+                        linear_norm = [float(i) / (num - 1) for i in range(num)]
+        
+                    # Apply the power and scale, all inside the comprehension
+                    load_vector = [start + (end - start) * (norm_val ** power) for norm_val in linear_norm]
+                    print("DEBUG VECTOR:", load_vector)
+                    print("--- Launching Abaqus job with Abaqus/CAE (mdb) ---")
+                    worker_script_bat = 'run_job.bat'
+                    iternum = 1
+                    # *************************************************************************
+                    # NOTE: for any crack propagation step inside the loop, the load amplitude
+                    # values must be the same across all increments of the step, i.e.,
+                    # ((0,value),(1.0,value)), consistent with crack initiation steps,
+                    # which will enable a most precise crack advance load prediction.
+                    # *************************************************************************
+                    for index, val in enumerate(load_vector):
+                        os.chdir(actual_directory)
+                        # if index==0:
+                        #     load_vector = [start + (end - start) * (norm_val ** power) for norm_val in linear_norm]
+                        print("Index: {0}, Value: {1}".format(index, val))
+                        # define the new .inp and directory name
+                        nameinp_k_mas_1=odbdef+'_crackprop'+'_m'+str(iternum)
+                        # modify the job name variable at each iteration:
+                        job_name = nameinp_k_mas_1
+                        # 1. Generate a temporary name for this specific iteration's model
+                        temp_model_name = "{}_Iter_{}".format(nameinpK, index)
+                        
+                        # 2. DELETE temp model if it was left over from a crash
+                        if temp_model_name in mdb.models:
+                            del mdb.models[temp_model_name]
+                            
+                        # 3. COPY the Master Model to the Temp Model
+                        # This creates a perfect clone that we can modify safely
+                        new_model = mdb.Model(name=temp_model_name, objectToCopy=mdb.models[nameinpK])
+                        if index==0:
+                            prev_load=newload
+                        elif index>0:
+                            prev_load=load_vector[index-1]
+                        
+                        new_model.amplitudes[amplname].setValues(
+                            timeSpan=STEP, 
+                            smooth=SOLVER_DEFAULT, 
+                            data=((0.0, load_vector[index]), (1.0, load_vector[index]))
+                        )
+                        # CREATE JOB using the TEMP MODEL
+                        # 
+                        # (or use the standard name, but point it to the new model)
+                        # use the exact same job name:
+                        if nameinp_k_mas_1 in mdb.jobs: del mdb.jobs[nameinp_k_mas_1]
+                        job_name = nameinp_k_mas_1
+                        
+                        if index == 0:
+                            print ("--- Starting Iteration: {} ---".format(job_name))                       
+                            # write the job for the first crack propagation step: 
+                            mdb.Job(name=nameinp_k_mas_1, model=temp_model_name, description='crack propagation analysis, m1', 
+                                    type=ANALYSIS, atTime=None, waitMinutes=0, waitHours=0, queue=None, 
+                                    memoryUnits=PERCENTAGE, getMemoryFromAnalysis=True, memory=memoria,
+                                    explicitPrecision=SINGLE, nodalOutputPrecision=FULL, echoPrint=OFF, 
+                                    modelPrint=OFF, contactPrint=OFF, historyPrint=OFF, userSubroutine=nameSUBR, 
+                                    scratch=work_dirkm, resultsFormat=ODB, multiprocessingMode=DEFAULT, numDomains=cpus, numCpus=cpus, 
+                                    numGPUs=0)
+                            # write the input .inp file:
+                            new_desc = 'crack propagation analysis, m{}, load={}'.format(iternum, load_vector[index])
+                            mdb.jobs[nameinp_k_mas_1].setValues(description=new_desc)
+                            mdb.jobs[nameinp_k_mas_1].writeInput(consistencyChecking=OFF)
+                            
+                            #Buscamos uinter='*Surface Interaction'
+                            cadenasCohesivo=lineasdefinteraccion(nameinp_k_mas_1+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
+                            #reemplazamos la primera linea en los dos archivos de inicio
+                            replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[0], cadenasUinter[0])
+                            #reemplazamos la segunda linea en los dos archivos de inicio
+                            replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[1], cadenasUinter[1])
+                            #reemplazamos la tercera linea en los dos archivos de inicio. Esta es distinta
+                            replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[2], cadenasUinterN11[0][:])
+                            #reemplazamos la linea que pide las salida de las superficies de contacto    
+                            cadenaFOcontact=lineasdefinteraccion(nameinp_k_mas_1+'.inp', 'CDISP, CSTRESS',1)  
+                            replacement(nameinp_k_mas_1+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                            # Add .fil output requests for the input file:
+                            add_urdfill_output(nameinp_k_mas_1+'.inp')
+                            # copy .inp file into the propagation directory
+                            shutil.copy(nameinp_k_mas_1+'.inp',work_dirkm)
+                            if not os.path.exists(work_dirkm):
+                                os.makedirs(work_dirkm)
+                                # print ("Created directory: {}".format(work_dirkm))
+                                work_dirkm = os.path.normpath(work_dirkm)
+                                print ("Normalized path: {}".format(work_dirkm))
+                            else:
+                                print ("Directory already exists: {}".format(work_dirkm))
+                                work_dirkm = os.path.normpath(work_dirkm)
+                                print ("Normalized path: {}".format(work_dirkm))
+                            # --- DELETE THE STALE JOB (CRITICAL STEP) ---
+                            # otherwise, mdb.Job(...) returns the OLD snapshot.
+                            if nameinp_k_mas_1 in mdb.jobs:
+                                del mdb.jobs[nameinp_k_mas_1]
+                        else:
+                            
+                            # copy the original .inp file
+                            copy(nameinp+'.inp', nameinp_k_mas_1+'.inp')
+                            #cargamos el input original de ABAQUS
+                            mdb.ModelFromInputFile(inputFileName=nameinp_k_mas_1+'.inp', name=temp_model_name)
+                            
+                            # -----------------------------------------------------
+                            # 1. 
+                            mod_name = mdb.models[temp_model_name]
+                            # 2. Get a list of all existing Predefined Fields (Initial State, Temp, etc.)
+                            # We use .keys() to get a static list so we don't modify the container while iterating
+                            p_field_keys = mod_name.predefinedFields.keys()
+                            # 3. Loop through and delete them
+                            for key in p_field_keys:
+                                print ("Cleaning up old Predefined Field: {}".format(key))
+                                del mod_name.predefinedFields[key]
+                            # update the amplitude field
+                            # mdb.models[nameinpK].amplitudes[amplname].setValues(timeSpan=STEP, 
+                            #             smooth=SOLVER_DEFAULT, data=((0.0, load_vector[index-1]), (1.0, val)))
+                            
+                            # DELETE the old job from the last iteration
+                            #    (This is necessary if you re-create it)
+                            if nameinp_k_mas_1 in mdb.jobs:
+                                print("Deletion of job: {}".format(nameinp_k_mas_1))
+                                del mdb.jobs[nameinp_k_mas_1]
+                            
+                            # -----------------------------------------------------
+                            #imponemos el estado inicial del job ganador entre las n para que sea el inicio del paso anterior
+                            instancesname=mdb.models[temp_model_name].rootAssembly.instances.keys()
+                            instanceslista=[]
+                            # Populate the list with the model instances
+                            for inst in range(len(instancesname)):
+                                instanceslista.append(mdb.models[temp_model_name].rootAssembly.instances[instancesname[inst]])
+                            # apply the updated initial state to the model database 
+                            mdb.models[temp_model_name].InitialState(updateReferenceConfiguration=OFF, 
+                                      fileName=odbdef+'_crackprop'+'_m'+str(iternum-1), 
+                                      endStep=LAST_STEP, endIncrement=STEP_END, name='Predefined Field-'+str(iternum), 
+                                      createStepName='Initial', instances=tuple(instanceslista))
+                            # 
+                            mdb.models[temp_model_name].steps.changeKey(fromName='Step-'+str(1), toName='Step-'+str(1)+'_m'+str(iternum))
+                            mdb.Job(name=nameinp_k_mas_1, model=temp_model_name, description='crack propagation analysis, m{}, load={}'.format(iternum, load_vector[index]),
+                                    type=ANALYSIS, atTime=None, waitMinutes=0, waitHours=0, queue=None, 
+                                    memoryUnits=PERCENTAGE, getMemoryFromAnalysis=True, memory=memoria,
+                                    explicitPrecision=SINGLE, nodalOutputPrecision=FULL, echoPrint=OFF, 
+                                    modelPrint=OFF, contactPrint=OFF, historyPrint=OFF, userSubroutine=nameSUBR, 
+                                    scratch=work_dirkm, resultsFormat=ODB, multiprocessingMode=DEFAULT, numDomains=cpus, numCpus=cpus, 
+                                    numGPUs=0)
+                            
+                            # write the input .inp file:
+                            mdb.jobs[nameinp_k_mas_1].writeInput(consistencyChecking=OFF)
+                            
+                            cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=9\n','\n']
+                            kn = 300; kt = kn*1
+                            cadenasUinterN=[kn,kt,kt,0.09375,0.0,0.0,8.]
+                            # 11 starting damage configurations:
+                            cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+", "+str(control)+'\n']))]
+                            cadenasUinterN2=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(2)+", "+str(control)+'\n']))]
+                            cadenasUinterN3=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(3)+", "+str(control)+'\n']))]
+                            cadenasUinterN4=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(4)+", "+str(control)+'\n']))]
+                            cadenasUinterN5=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(5)+", "+str(control)+'\n']))]
+                            cadenasUinterN6=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(6)+", "+str(control)+'\n']))]
+                            cadenasUinterN7=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(7)+", "+str(control)+'\n']))]
+                            cadenasUinterN8=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(8)+", "+str(control)+'\n']))]
+                            cadenasUinterN9=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(9)+", "+str(control)+'\n']))]
+                            cadenasUinterN10=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(10)+", "+str(control)+'\n']))]
+                            cadenasUinterN11=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(11)+", "+str(control)+'\n']))]
+                            
+                            Uinterprops=[cadenasUinterN1,cadenasUinterN11]    
+                            cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
+                            cadenanombreSDV='ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF'
+                            
+                            #Buscamos uinter='*Surface Interaction'
+                            cadenasCohesivo=lineasdefinteraccion(nameinp_k_mas_1+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
+                            #reemplazamos la primera linea en los dos archivos de inicio
+                            replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[0], cadenasUinter[0])
+                            #reemplazamos la segunda linea en los dos archivos de inicio
+                            replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[1], cadenasUinter[1])
+                            #reemplazamos la tercera linea en los dos archivos de inicio. Esta es distinta
+                            replacement(nameinp_k_mas_1+'.inp', cadenasCohesivo[2], cadenasUinterN1[0][:])
+                            #reemplazamos la linea que pide las salida de las superficies de contacto    
+                            cadenaFOcontact=lineasdefinteraccion(nameinp_k_mas_1+'.inp', 'CDISP, CSTRESS',1)  
+                            replacement(nameinp_k_mas_1+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                            
+                            # Add .fil output requests for the input file:
+                            add_urdfill_output(nameinp_k_mas_1+'.inp')
+                            # Call the function to modify the .inp file with the new load values
+                            modify_amplitude_dataV2(nameinp_k_mas_1+'.inp', load_vector[index], load_vector[index])
+                            # copy the .inp file into the propagation dir.
+                            shutil.copy(nameinp_k_mas_1+'.inp', work_dirkm)
+                            os.chdir(actual_directory)
+                        # CLEANUP
+                        # Delete the temp model to free up memory
+                        del mdb.models[temp_model_name]
+                        
+                        # Define files to monitor
+                        lock_file = os.path.join(work_dirkm, job_name + '.lck')
+                        
+                        # ... (your pre-check to remove old .lck files) ...
+                        if os.path.exists(lock_file):
+                            os.remove(lock_file)
+                                
+                        # --- THIS IS THE MODIFIED PART ---
+                        # Call the .bat file and pass the job_name as an argument
+                        command = [
+                            worker_script_bat,
+                            job_name,
+                            work_dirkm # work directory argument
+                        ]
+                        
+                        print ("Submitting job via Worker .bat file...")
+                        # We use .call() because the .bat file is fast
+                        # and will exit as soon as the job is submitted.
+                        subprocess.call(command, cwd=work_dirkm)
+                        # --- END OF MODIFIED PART ---
+                        
+                        # --- Rest of your script ---
+                        
+                        # 1. Wait for the job to start
+                        # print ("Waiting for job to start (for .lck file)...")
+                        time_to_start = 0
+                        # ... (rest of your .lck polling logic) ...
+                        # while not os.path.exists(lock_file):
+                        #     time.sleep(1)
+                        #     # ... (etc) ...
+                            
+                        # 2. Wait for the job to finish
+                        # print ("Job is running. Polling {}.lck...".format(job_name))
+                        # while os.path.exists(lock_file):
+                        #     time.sleep(10)
+                        print ("--- Iteration {} complete. ---".format(job_name))
+                        # ADVANCE ITERATION POSTPROCESS
+                        # change to the crack advance working dir.
+                        os.chdir(work_dirkm)
+                        enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(job_name,control,cadenanombreSDV,work_dirkm)
+                        model_outputfile(actual_directory,sim_file,k,11,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
+                        datos_salida.append([float(val),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),job_name,len(NeL2damagetotalN)])
+                        stepdata.append([k,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][5]])
+                        KDn_outputfile(actual_directory,Dirname,k,11,enerHtotalN,sumaenerinterN,len(NeL2damageKN),tf,energy_evol)
+                        iternum += 1
+                        
+                    print("--- Sequential analysis complete. ---")
+                    
+                    chdir(work_dirkm)
+                    # List of file extensions to delete
+                    extensions_to_delete = ['*.dat', '*.sim', '*.com', '*.jnl', '*.stt', '*.res','*.mdl'\
+                                    '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil','*.prt']
+                    for ext in extensions_to_delete:
+                        # glob.glob finds all files matching the pattern
+                        files_to_remove = glob.glob(ext)
+                        for f in files_to_remove:
+                            try:
+                                os.remove(f)
+                                "  - Deleted: {}".format(f)
+                            except OSError as e:
+                                "  - Error deleting file {}: {}".format(f, e)
+                                
+                    chdir(actual_directory)
+                    if godb==1:
+                        list_odbs=(['*_K'+str(k-1)+'.odb','*_K'+str(k-1)+'.inp','*_K'+str(k)+'.odb',
+                                    '*_K'+str(k)+'.sta','*_K'+str(k-1)+'.sta','*_K'+str(k)+'.inp','*_crackprop'+'_m*'+'.inp'])
+                        mover_archivos(list_odbs,Dirname)
+                        #borramos el resto de archivos de ese paso                                          
+                        list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
+                                       '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
+                        borrar_archivos(list_delete)
+                        
+                    end = time.time()
+                    print('Simulation has terminated in %.2f' %((end-start)/60)+' min')
+                    sys.exit()
+
+            # FORCE-CONTROL ANALYSIS
+            else:
+                # CRACK PROPAGATION AND ARREST STAGE: FORCE CONTROL
+                # -------------------------------------------------------------
+                def create_crack_restart_inpFctrl(file_name, n, displacement_mag):
+                    """
+                    Generates an Abaqus restart .inp file for crack propagation step 'n'.
+                    
+                    Args:
+                        file_name (str): Name of the new .inp file (without extension).
+                        n (int): The current loop iterator (step number). Starts at 2.
+                        displacement_mag (float): The target displacement value for this step (e.g., 0.0395).
+                    """
+                    
+                    # Calculate the step to read from
+                    prev_step = n
+                    
+                    # Create unique names for this iteration to avoid conflicts
+                    amp_name = "AMP-BIS-{}".format(n)
+                    step_name = "Step-{}".format(n)
+                    
+                    full_filename = file_name + '.inp'
+                    
+                    print ("Writing restart file: {}".format(full_filename))
+                    
+                    with open(full_filename, 'w') as f:
+                        # --- HEADER ---
+                        f.write("*HEADING\n")
+                        f.write("Crack Propagation Restart - Step {}\n".format(n))
+                        
+                        # --- RESTART READ ---
+                        # The 'END STEP' is crucial here to reset KINC to 1
+                        f.write("*RESTART, READ, STEP={}, END STEP\n".format(prev_step))
+                        
+                        # --- AMPLITUDE DEFINITION ---
+                        # We define a NEW amplitude for this specific step.
+                        # Format: Time, Value, Time, Value
+                        # This creates a constant hold at 'displacement_mag' across the step (0.0 to 1.0)
+                        f.write("**\n")
+                        f.write("** New Amplitude for Step {}\n".format(n))
+                        f.write("*AMPLITUDE, NAME={}\n".format(amp_name))
+                        f.write("0.0, {}, 1.0, {}\n".format(displacement_mag, displacement_mag))
+                        
+                        # --- STEP DEFINITION ---
+                        f.write("**\n")
+                        f.write("** STEP: {}\n".format(step_name))
+                        f.write("**\n")
+                        f.write("*Step, name={}, nlgeom=NO, inc=25, unsymm=NO\n".format(step_name))
+                        f.write("*Static, direct\n")
+                        f.write("0.04, 1., \n")
+                        
+                        # --- TRACTION BOUNDARY CONDITIONS ---
+                        f.write("**\n")
+                        f.write("** LOADS\n")
+                        f.write("**\n")
+                        # Apply Positive Force F to TOPN
+                        f.write("** Name: Load-1   Type: Concentrated force\n")
+                        f.write("*Cload, amplitude={}\n".format(amp_name))
+                        f.write("Topcn, 2, 1.\n")
+                        f.write("** Name: Load-2   Type: Concentrated force\n")
+                        f.write("*Cload, amplitude={}\n".format(amp_name))
+                        f.write("Topen, 2, 0.5\n")
+                        
+                        # Apply Negative Force F to BOTN
+                        f.write("** Name: Load-3   Type: Concentrated force\n")
+                        f.write("*Cload, amplitude={}\n".format(amp_name))
+                        f.write("Botcn, 2, -1.\n")
+                        f.write("** Name: Load-4   Type: Concentrated force\n")
+                        f.write("*Cload, amplitude={}\n".format(amp_name))
+                        f.write("Boten, 2, -0.5\n")
+                        
+                        # --- OUTPUT REQUESTS ---
+                        f.write("**\n")
+                        f.write("** OUTPUT REQUESTS\n")
+                        f.write("** This block is for the URDFIL subroutine\n")
+                        f.write("*ENERGY FILE, FREQUENCY=1\n")
+                        
+                        # Important: Write restart for the NEXT loop iteration
+                        f.write("*Restart, write, frequency=1\n")
+                        
+                        f.write("**\n")
+                        f.write("** FIELD OUTPUT: F-Output-1\n")
+                        f.write("**\n")
+                        f.write("*Output, field\n")
+                        f.write("*Node Output, nset=INITIALFRONT\n")
+                        f.write("COORD, \n")
+                        
+                        f.write("**\n")
+                        f.write("** FIELD OUTPUT: F-Output-2\n")
+                        f.write("**\n")
+                        f.write("*Contact Output, nset=\"TOP ARM-1\"\n")
+                        f.write("CDISP, CSTRESS, SDV\n")
+                        
+                        f.write("**\n")
+                        f.write("** FIELD OUTPUT: F-Output-3\n")
+                        f.write("**\n")
+                        f.write("*Element Output, elset=\"TOP ARM-1\", directions=NO\n")
+                        f.write("SDV, \n")
+                        
+                        f.write("**\n")
+                        f.write("** FIELD OUTPUT: F-Output-4\n")
+                        f.write("**\n")
+                        f.write("*Node Output, nset=\"TOP ARM-1\"\n")
+                        f.write("U, \n")
+                        
+                        f.write("**\n")
+                        f.write("** FIELD OUTPUT: F-Output-5\n")
+                        f.write("**\n")
+                        f.write("*Node Output, nset=TOPN\n")
+                        f.write("CF, TF, UT\n")
+                        
+                        f.write("**\n")
+                        f.write("** HISTORY OUTPUT: H-Output-1\n")
+                        f.write("**\n")
+                        f.write("*Output, history\n")
+                        f.write("*Energy Output\n")
+                        f.write("ALLIE, ALLSE, ALLWK\n")
+                        
+                        f.write("**\n")
+                        f.write("** HISTORY OUTPUT: H-Output-2\n")
+                        f.write("**\n")
+                        f.write("*Node Output, nset=TOPN\n")
+                        f.write("CF2, TF2, U2\n")
+                        
+                        f.write("*End Step\n")
+                    return full_filename           
+                chdir(actual_directory)
+                # name of the Abaqus worker script
+                worker_script = 'runrestart_job.bat' 
+                # define the new .inp and directory name
+                nameinp_k_mas_1=odbdef+'_crackprop'+'_m'+str(1)
+                work_dirkm = os.path.join(actual_directory, 
+                             os.path.basename(odbdef+'_crackprop'+'_m'+str(0) + '_scratch'))
+                # create a new crack propagation working directory
+                os.mkdir(work_dirkm)
+                # copy the worker script into the new work directory
+                shutil.copy(worker_script, work_dirkm)
+                
+                # files we need to export
+                inp_file = os.path.join(odbdef + '.inp')
+                mdl_file = os.path.join(work_dir+'\\'+odbdef + '.mdl')
+                prt_file = os.path.join(work_dir+'\\'+odbdef + '.prt')
+                res_file = os.path.join(work_dir+'\\'+odbdef + '.res')
+                odb_file = os.path.join(work_dir+'\\'+odbdef + '.odb')
+                stt_file = os.path.join(work_dir+'\\'+odbdef + '.stt')
+                export_fil = [mdl_file,prt_file,odb_file,nameSUBR,res_file,
+                              stt_file,common_file]
+                # export the files into the new directory
+                for f in export_fil:
+                    shutil.copy(f, work_dirkm)
+                """
+                # *************************************************************************
+                # NOTE: for any crack propagation step inside the loop, the load amplitude
+                # values must be the same across all increments of the step, i.e.,
+                # ((0,value),(1.0,value)), consistent with crack initiation steps,
+                # which will enable a most precise crack advance load prediction;
+                # should be invariant to the bisection algorithm scheme.
+                # *************************************************************************
+                """
+                # propagation m-substeps, for loop:
+                for m in range(1,11):
+                    # change to the script parent dir.
+                    chdir(actual_directory)
+                    if m==1:
+                        oldjob_name=odbdef
+                    else: 
+                        oldjob_name=odbdef+'_m'+str(m-1)
+                    inpfil_name = odbdef+'_m'+str(m)
+                    inp_filename = create_crack_restart_inpFctrl(inpfil_name, m, newload)
+                    shutil.copy(inp_filename, work_dirkm)
+                    os.remove(inp_filename)
+                    # Change to the crack propagation dir.
+                    chdir(work_dirkm)
+                    # Define files to monitor
+                    lock_file = os.path.join(inpfil_name + '.lck')
+                    
+                    # ... (your pre-check to remove old .lck files) ...
+                    # if os.path.exists(lock_file):
+                    #     os.remove(lock_file)
+                            
+                    # --- THIS IS THE MODIFIED PART ---
+                    # Call the .bat file and pass the job_name as an argument
+                    command = [
+                        worker_script,
+                        inpfil_name,
+                        oldjob_name,
+                        work_dirkm # work directory argument
+                    ]
+                    
+                    print("Submitting job via Worker .bat file...")
+                    # We use .call() because the .bat file is fast
+                    # and will exit as soon as the job is submitted.
+                    subprocess.call(command, cwd=work_dirkm)
+                    # --- Rest of your script ---
+                    
+                    # 1. Wait for the job to start
+                    # print ("Waiting for job to start (for .lck file)...")
+                    # time_to_start = 0
+                    # ... (rest of your .lck polling logic) ...
+                    # while not os.path.exists(lock_file):
+                    #     time.sleep(1)
+                        # ... (etc) ...
+                    
+                    # 2. Wait for the job to finish
+                    # print ("Job is running. Polling {}.lck...".format(inpfil_name))
+                    # while os.path.exists(lock_file):
+                    #     time.sleep(10)
+                    print ("--- Iteration {} complete. ---".format(inpfil_name))
+                    odb_file = inpfil_name
+                    enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(odb_file,control,cadenanombreSDV,work_dirkm)
+                    # delete redundant files                                        
+                    list_delete = ('*.sta', '*.dat', '*.sim', '*.msg', '*.com', '*.jnl',\
+                                   '*.mtx','*.pes','*.pmg','*.ipm','*.pyc','*.fil')
+                        
+                print('*CRACK PROPAGATION STOPPED AT LOAD SUBSTEP NUMBER: {} *'.format(m))
+                # delete redundant files                                        
+                list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
+                               '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.res','*.mdl','*.stt','*.fil')
+                borrar_archivos(list_delete)
+                chdir(actual_directory)
+                end = time.time()
+                print('Program has terminated in %.2f' %((end-start)/60)+' min')
+                sys.exit()
+                    # if m==1:
+                    #     odbdef=Pmtesc_postp[indx][-1]
+                    #     # shutil.copy(odbdef+'.odb',work_dirkm)
+                    #     # shutil.copy(odbdef+'.res',work_dirkm)
+                    #     # shutil.copy(odbdef+'.prt',work_dirkm)
+                    #     # shutil.copy(common_file,work_dirkm)
+                    # elif m>1:
+                    #     nameinp_k_mf=nameinp+'_crackp'+'_m'+str(m-1)
+                    #     job_namef = '{}'.format(nameinp_k_mf)
+                    #     work_dirkmf = os.path.join(work_dir, os.path.basename(job_namef + '_scratch'))
+                        
+                    #     odbdef=work_dirkmf+'\\'+nameinp_k_mf
+                    #     # shutil.copy(odbdef+'.odb',work_dirkm)
+                    #     # shutil.copy(odbdef+'.res',work_dirkm)
+                    #     # shutil.copy(odbdef+'.prt',work_dirkm)
+                    #     # shutil.copy(common_file,work_dirkm)
+                    # # load original ABAQUS input file
+                    # mdb.ModelFromInputFile(inputFileName=nameinp+'.inp', name=nameinp_k_m)
+                    # instancesname=mdb.models[nameinp_k_m].rootAssembly.instances.keys()
+                    # instanceslista=[]
+                    # for inst in range(len(instancesname)):
+                    #     instanceslista.append(mdb.models[nameinp_k_m].rootAssembly.instances[instancesname[inst]])
+                        
+                    # mdb.models[nameinp_k_m].InitialState(updateReferenceConfiguration=OFF, fileName=odbdef, 
+                    #           endStep=LAST_STEP, endIncrement=STEP_END, name='Predefined Field-1', 
+                    #           createStepName='Initial', instances=tuple(instanceslista))
+                    # # change step name:
+                    # mdb.models[nameinp_k_m].steps.changeKey(fromName='Step-1', toName='Step-'+str(2)+'m'+str(m))
+                    
+                    # cadenasUinter=['*Surface Interaction, name=IntProp-1, user, depvar=22, properties=9\n','\n']
+                    # kn = 300; kt = kn*1
+                    # cadenasUinterN=[kn,kt,kt,0.09375,0.0,0.0,8.]
+                    # # 11 starting damage configurations:
+                    # cadenasUinterN1=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(1)+", "+str(control)+'\n']))]
+                    # cadenasUinterN2=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(2)+", "+str(control)+'\n']))]
+                    # cadenasUinterN3=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(3)+", "+str(control)+'\n']))]
+                    # cadenasUinterN4=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(4)+", "+str(control)+'\n']))]
+                    # cadenasUinterN5=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(5)+", "+str(control)+'\n']))]
+                    # cadenasUinterN6=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(6)+", "+str(control)+'\n']))]
+                    # cadenasUinterN7=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(7)+", "+str(control)+'\n']))]
+                    # cadenasUinterN8=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(8)+", "+str(control)+'\n']))]
+                    # cadenasUinterN9=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(9)+", "+str(control)+'\n']))]
+                    # cadenasUinterN10=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(10)+", "+str(control)+'\n']))]
+                    # cadenasUinterN11=[", ".join(map(str, [str(val) for val in cadenasUinterN]+[str(11)+", "+str(control)+'\n']))]
+                    # Uinterprops=[cadenasUinterN1,cadenasUinterN11]    
+                    # cadenaSDVcontact=['CDISP, CSTRESS, SDV\n']
+                    # cadenanombreSDV='ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF'
+                    # nameodbcargainicial=nameinp+'_crackp'+'_m'+str(m)
+                    # #Buscamos uinter='*Surface Interaction'
+                    # cadenasCohesivo=lineasdefinteraccion(nameinp_k_m+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
+                    # #reemplazamos la primera linea en los dos archivos de inicio
+                    # replacement(nameinp_k_m+'.inp', cadenasCohesivo[0], cadenasUinter[0])
+                    # #reemplazamos la segunda linea en los dos archivos de inicio
+                    # replacement(nameinp_k_m+'.inp', cadenasCohesivo[1], cadenasUinter[1])
+                    # #reemplazamos la tercera linea en los dos archivos de inicio. Esta es distinta
+                    # replacement(nameinp_k_m+'.inp', cadenasCohesivo[2], cadenasUinterN1[0][:])
+                    # #reemplazamos la linea que pide las salida de las superficies de contacto    
+                    # cadenaFOcontact=lineasdefinteraccion(nameinp_k_m+'.inp', 'CDISP, CSTRESS',1)  #buscamos la cadena a cambiar
+                    # replacement(nameinp_k_m+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                    # # replacement(nameinp_k_m+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                    # mdb.models[nameinp_k_m].amplitudes[amplname].setValues(timeSpan=STEP, smooth=SOLVER_DEFAULT, data=((0.0, Fk), (1.0, Fk)))
+                    
+                    # # write the job for the crack propagation step: 
+                    # mdb.Job(name=nameinp_k_m, model=nameinp_k_m, description='crack propagation analysis', 
+                    #         type=ANALYSIS, atTime=None, waitMinutes=0, waitHours=0, queue=None, 
+                    #         memoryUnits=PERCENTAGE, getMemoryFromAnalysis=True, memory=memoria,
+                    #         explicitPrecision=SINGLE, nodalOutputPrecision=FULL, echoPrint=OFF, 
+                    #         modelPrint=OFF, contactPrint=OFF, historyPrint=OFF, userSubroutine=nameSUBR, 
+                    #         scratch=work_dir, resultsFormat=ODB, multiprocessingMode=DEFAULT, numDomains=cpus, numCpus=cpus, 
+                    #         numGPUs=0)
+                    # # write the input .inp file:
+                    # mdb.jobs[nameinp_k_m].writeInput(consistencyChecking=OFF)
+                    
+                    # # Add .fil output requests for the input file:
+                    # add_urdfill_output(nameinp_k_m+'.inp')
+                    # #Buscamos uinter='*Surface Interaction'
+                    # cadenasCohesivo=lineasdefinteraccion(nameinp_k_m+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
+                    # #reemplazamos la primera linea en los dos archivos de inicio
+                    # replacement(nameinp_k_m+'.inp', cadenasCohesivo[0], cadenasUinter[0])
+                    # #reemplazamos la segunda linea en los dos archivos de inicio
+                    # replacement(nameinp_k_m+'.inp', cadenasCohesivo[1], cadenasUinter[1])
+                    # #reemplazamos la tercera linea en los dos archivos de inicio. Esta es distinta
+                    # replacement(nameinp_k_m+'.inp', cadenasCohesivo[2], cadenasUinterN1[0][:])
+                    # #reemplazamos la linea que pide las salida de las superficies de contacto    
+                    # cadenaFOcontact=lineasdefinteraccion(nameinp_k_m+'.inp', 'CDISP, CSTRESS',1)  #buscamos la cadena a cambiar
+                    # replacement(nameinp_k_m+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                    # # replacement(nameinp_k_m+'.inp', cadenaFOcontact[0], cadenaSDVcontact[0])
+                    # mdb.models[nameinp_k_m].amplitudes[amplname].setValues(timeSpan=STEP, smooth=SOLVER_DEFAULT, data=((0.0, Fk), (1.0, Fk)))
+                    
+                    # # shutil.copy(nameSUBR, work_dirkm)
+                    # myJobm = mdb.JobFromInputFile(name=nameinp_k_m, 
+                    #     inputFileName=nameinp_k_m, type=ANALYSIS, 
+                    #     atTime=None, waitMinutes=0, waitHours=0, queue=None,
+                    #     memoryUnits=PERCENTAGE, getMemoryFromAnalysis=True, memory=memoria, 
+                    #     explicitPrecision=SINGLE, nodalOutputPrecision=FULL, userSubroutine=nameSUBR, 
+                    #     scratch=work_dir, resultsFormat=ODB, multiprocessingMode=DEFAULT, numDomains=cpus, numCpus=cpus, 
+                    #     numGPUs=0)
+                    # myJobm.submit(consistencyChecking=OFF)
+                    # myJobm.waitForCompletion()
+                    # # chdir(work_dirkm)
+                    
+                    # # Define the lock file path
+                    # lock_file = os.path.join(work_dir, myJobm.name + '.lck')
+            
         elif k>2 and NeL2damagek!=0 and stepdata[-1][-1]<0 and eps0>bisectol and k<=numiter:
-            print(k, Fk, incre, eps0, NeL2damagek, energy_evol[-1][-3])
+            print(k, Fk, incre, eps0, NeL2damagek, energy_evol[-1][5])
             incre = (Fk-Fkm1)
             if NeL2damagekm1!=0 and stepdata[-2][-1]>0:
                 newload=Fkm1+(0.5*abs(incre))
@@ -1022,84 +2247,8 @@ while (k<=numiter):
                    '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt','*.fil')
     borrar_archivos(list_delete)
     k+=1    
-    # LOAD BISECTION ALGORITHM ENDS HERE
-    
-#%%preparamos el siguiente inp desde el odb anterior
-#importamos el inp inicial sin CI impuestas para crear el nuevo modelo del paso siguiente 
-nameinp_k_mas_1=nameinp+str(k+1)
-copy(nameinp+'.inp',nameinp_k_mas_1+'.inp')
-#cargamos el input original de ABAQUS
-mdb.ModelFromInputFile(inputFileName=nameinp+'.inp', name=nameinp_k_mas_1)
-#imponemos el estado inicial del job ganador entre las n para que sea el inicio del paso anterior
-instancesname=mdb.models[nameinp_k_mas_1].rootAssembly.instances.keys()
-instanceslista=[]
-for inst in range(len(instancesname)):
-    instanceslista.append(mdb.models[nameinp_k_mas_1].rootAssembly.instances[instancesname[inst]])
-    
-mdb.models[nameinp_k_mas_1].InitialState(updateReferenceConfiguration=OFF, fileName=odbdef, 
-          endStep=LAST_STEP, endIncrement=STEP_END, name='Predefined Field-1', 
-          createStepName='Initial', instances=tuple(instanceslista))
+# LOAD BISECTION ALGORITHM ENDS HERE
 
-# cambiamos el nombre del step  
-mdb.models[nameinp_k_mas_1].steps.changeKey(fromName='Step-1', toName='Step-'+str(k+1))
-# cambiamos la carga
-#%%aumentamos la carga si no hay mas rotura
-if(collections.Counter(NeL2damagetotal)==collections.Counter(NeL2damageKm1)):
-    newload=incr+newload
-mdb.models[nameinp_k_mas_1].amplitudes[amplname].setValues(timeSpan=STEP, smooth=SOLVER_DEFAULT, data=((0.0, newload), (1.0, newload)))
-#%%guardamos el dagno anterior
-NeL2damageKm1=NeL2damagetotal
+#
 
-#escribimos el inp final de k mas 1 para empezar el siguiente paso  
-mdb.Job(name=nameinp_k_mas_1, model=nameinp_k_mas_1, description='', 
-        type=ANALYSIS, atTime=None, waitMinutes=0, waitHours=0, queue=None, 
-        memoryUnits=PERCENTAGE, getMemoryFromAnalysis=True, memory=memoria,
-        explicitPrecision=SINGLE, nodalOutputPrecision=SINGLE, echoPrint=OFF, 
-        modelPrint=OFF, contactPrint=OFF, historyPrint=OFF, userSubroutine=nameSUBR, 
-        scratch=actual_directory, resultsFormat=ODB, multiprocessingMode=DEFAULT, numDomains=cpus, numCpus=cpus, 
-        numGPUs=0)
 
-mdb.jobs[nameinp_k_mas_1].writeInput(consistencyChecking=OFF)
-#dejamos el inp basico por donde empezara el bucle con los diferentes inicios
-nameinpK=nameinp_k_mas_1
-print('Updated applied load: ',newload)
-#%% agnadimos el nuevo odb al nuevo odb completo para la salida
-if k==1:
-    nameodbcompleto=nameinp+'_completo.odb'
-    copy(odbdef+'.odb',nameodbcompleto)
-else:
-    call('abaqus restartjoin originalodb='+nameodbcompleto+' restartodb='+odbdef+'.odb'+' history',shell=True)
-### borramos archivos menos el odb que sera opcional. No se puede hacer antes 
-    #guardamos lo odb si los queremos
-    if godb==1:
-        list_odbs=(['*_K'+str(k-1)+'.odb'])
-        mover_archivos(list_odbs,Dirname)
-    #borramos el resto de archivos de ese paso                                          
-    list_delete = (['*_K'+str(k-1)+'.*','*'+str(k-1)+'.inp'])
-    #borrar_archivos(list_delete)
-#%%final  
-filedicc=open(actual_directory+'/datospasoscompletoUINTER.pkl','wb')    
-pickle.dump(datos_salida,filedicc)
-filedicc.close()
-if godb==1:
-    list_odbs=(['*_K'+str(k)+'.odb'])
-    mover_archivos(list_odbs,Dirname)
-
-move('datospasoscompletoUINTER.pkl',Dirname)
-move(nameodbcompleto,Dirname)
-list_delete = (['*_K'+str(k)+'.*','*'+str(k)+'.inp','*'+str(k+1)+'.inp'])
-borrar_archivos(list_delete)    
-list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
-               '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
-borrar_archivos(list_delete)
-end = time.time()
-print('La simulacion ha terminado satisfactoriamente en %.2f' %((end-start)/60)+' min')
-
-##%%
-##PARA ABRIR UN ARCHIVO PKL:
-import pickle
-with open(Dirname+'/datospasoscompletoUINTER.pkl','rb') as f:
-    datospasoscompletoUINTER = pickle.load(f)
-# Convert PKL 2 numpy array:
-stepdata_np=np.array(datospasoscompletoUINTER)
-np.savetxt(Dirname+'/table_stepdata.txt', stepdata_np, delimiter='\t')
