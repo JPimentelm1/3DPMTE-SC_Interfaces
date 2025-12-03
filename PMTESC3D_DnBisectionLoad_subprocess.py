@@ -2,10 +2,10 @@
 """
 Created on Mon Jul 10 15:12:59 2023
 
-@authors: Mar Munoz Reja Moreno;
-          Jose M. Pimentel: load bisection algorithm, starting damage dist.
-        implementation (uinter), Python's subprocess module for abaqus job cluster
-        execution, jobs parallelization approach.
+@authors: Mar Munoz Reja Moreno.
+          Jose M. Pimentel: onset and advance bisection algorithm, starting damage dist.
+        implementation (UINTER), Python's subprocess module for abaqus job cluster
+        execution, abaqus jobs parallelization approach.
 """
 from __future__ import print_function
 from os import chdir, path, mkdir, getcwd, remove
