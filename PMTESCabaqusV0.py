@@ -291,7 +291,8 @@ def PMTESCcritEneUMAT(name_files, control,cadenanombreSDV):
     odb.close()
     return eneHtotal,interf_strnenergy,NeL2damageK,NeL2damagetotal,dcbtf2_field,energy_data
 #
-def PMTESCcritEneSubr(name_files, control,cadenanombreSDV, workdir):
+def PMTESCcritEneSubr(name_files,control,cadenanombreSDV, workdir):
+    
     odb = openOdb(name_files + '.odb')    
     odbv = session.openOdb(name_files + '.odb')
     myAssembly = odb.rootAssembly
