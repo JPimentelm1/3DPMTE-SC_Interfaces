@@ -2,10 +2,10 @@
 """
 Created on Mon Jul 10 15:12:59 2023
 
-@authors: Mar Munoz Reja Moreno.
-          Jose M. Pimentel: onset and advance bisection algorithm, starting damage dist.
-        implementation (UINTER), Python's subprocess module for abaqus job cluster
-        execution, abaqus jobs parallelization approach.
+@authors: Mar Munoz Reja Moreno;
+          Jose M. Pimentel: load bisection algorithm, starting damage dist.
+        implementation (uinter), Python's subprocess module for abaqus job cluster
+        execution, jobs parallelization approach.
 """
 from __future__ import print_function
 from os import chdir, path, mkdir, getcwd, remove
@@ -118,6 +118,10 @@ def add_urdfill_output(input_file_path):
     urdfill_block = (
         "** This block is for the URDFIL subroutine\n"
         "*ENERGY FILE, FREQUENCY=1\n"
+        "**\n"
+        "*CONTACT FILE, FREQUENCY=1\n"
+        "SDV\n"
+        "**"
     )
 
     # Define the target header to search for
@@ -166,9 +170,12 @@ def modify_amplitude_data(input_file_path, new_load):
         input_file_path: The full path to the Abaqus input file (.inp).
         new_load: The positive float value to insert into the amplitude data.
     """
+    
     # The header line to search for
     target_header = "*AMPLITUDE, name=AMP-1"
-
+    # The header string to search for, cleaned of spaces for a robust check
+    target_header_clean = "*AMPLITUDE,NAME=AMP-1"
+    
     # Ensure the new_load value is a positive float
     if not isinstance(new_load, (int, float)) or new_load < 0:
         print("Error: new_load must be a positive number.")
@@ -184,7 +191,7 @@ def modify_amplitude_data(input_file_path, new_load):
         for i, line in enumerate(lines):
             # Clean up the line for a robust, case-insensitive comparison
             cleaned_line = line.strip().upper().replace(" ", "")
-            if cleaned_line == target_header.replace(" ", ""):
+            if cleaned_line == target_header_clean.replace(" ", ""):
                 # The target is the line immediately after the header
                 line_to_replace_index = i + 1
                 break
@@ -317,12 +324,12 @@ def create_crack_restart_inp(file_name, n, displacement_mag):
         f.write("** BOUNDARY CONDITIONS\n")
         f.write("**\n")
         # Apply Positive Displacement to TOPN
-        f.write("** Name: Disp-BC-5 Type: Displacement/Rotation\n")
+        f.write("** Name: Disp-BC-4 Type: Displacement/Rotation\n")
         f.write("*Boundary, amplitude={}\n".format(amp_name))
         f.write("TOPN, 2, 2, 1.\n")
         
         # Apply Negative Displacement to BOTN
-        f.write("** Name: Disp-BC-6 Type: Displacement/Rotation\n")
+        f.write("** Name: Disp-BC-5 Type: Displacement/Rotation\n")
         f.write("*Boundary, amplitude={}\n".format(amp_name))
         f.write("BOTN, 2, 2, -1.\n")
         
@@ -398,7 +405,10 @@ incr=1
 factorcarga=1.0
 
 # initial load:
-cargainicial=1
+if control==1:
+    cargainicial=float(1)
+else:
+    cargainicial=1.0E-3
 # initial step:
 k=1
 # Bisection algorithm stop tolerance
@@ -412,7 +422,7 @@ bisect_itercnt=1
 # Bisection limit of iterations
 numiter=50
 # Bisection scheme: full (1) or crack onset only (0)
-bis_option=1
+bis_option=0
 #
 Nmin = round(-mth.log10(bisectol)/mth.log10(2))
 
@@ -466,6 +476,7 @@ sim_file=Dirname+'/stepdata.txt'
 
 nameodbcargainicial=nameinp+'-carga-inicial'
 shutil.copy(nameinp+'.inp',nameodbcargainicial+'.inp')
+modify_amplitude_data(nameodbcargainicial+'.inp', cargainicial)
 #Buscamos uinter='*Surface Interaction'
 cadenasCohesivo=lineasdefinteraccion(nameodbcargainicial+'.inp', '*Surface Interaction',3)  #buscamos la cadena a cambiar
 #reemplazamos la primera linea en los dos archivos de inicio
@@ -486,7 +497,6 @@ try:
     os.remove(signalFile)
 except OSError:
     pass
-# sys.exit()
 
 myJob = mdb.JobFromInputFile(name=nameodbcargainicial, 
         inputFileName=nameodbcargainicial, type=ANALYSIS, 
@@ -592,6 +602,7 @@ modify_amplitude_data(nameinpK+'.inp', newload)
 NeL2damageKm1=[]
 datos_salida=[]
 stepdata=[]
+# sys.exit()
 #%% LOAD BISECTION ALGORITHM STARTS HERE
 
 while (k<=numiter):
@@ -994,7 +1005,11 @@ while (k<=numiter):
         list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                        '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
         borrar_archivos(list_delete)
-    
+        for Dn in range(1,len(Uinterprops)+1):
+            nameinpDNk=nameinpK+'_N'+str(Dn)+'_K'+str(k)
+            job_name = '{}'.format(nameinpDNk)
+            work_dir = os.path.join(actual_directory, os.path.basename(job_name + '_scratch'))
+            shutil.rmtree(work_dir)
     else:
         steps_data=np.load('sim_file.npy')
         print(steps_data)
@@ -1036,6 +1051,11 @@ while (k<=numiter):
             list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                            '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
             borrar_archivos(list_delete)
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinpK+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = os.path.join(actual_directory, os.path.basename(job_name + '_scratch'))
+                shutil.rmtree(work_dir)
         elif k==2 and abs(incre)!=0 and stepdata[-1][5]==0:
             if stepdata[-2][5]==0:
                 newload = 2*Fk
@@ -1058,7 +1078,11 @@ while (k<=numiter):
             list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                            '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
             borrar_archivos(list_delete)
-        
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = job_name + '_scratch'
+                shutil.rmtree(work_dir)
         elif k==2 and abs(incre)!=0 and stepdata[-1][-1]>0 and stepdata[-1][5]!=0:
             if stepdata[-2][5]==0:
                 newload = 2*Fk
@@ -1083,7 +1107,11 @@ while (k<=numiter):
             list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                            '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
             borrar_archivos(list_delete)
-            
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = job_name + '_scratch'
+                shutil.rmtree(work_dir)
         elif k>2 and NeL2damagek!=0 and stepdata[-1][-1]<0 and eps0<bisectol and k<=numiter:
             print(k, Fk, tf, eps0, NeL2damagek, job_name +'_scratch'+'//'+odbdef)
             work_dirodb=Dirname+'//'+job_name + '_scratch'
@@ -1091,7 +1119,7 @@ while (k<=numiter):
             work_dir = os.path.join(actual_directory, os.path.basename(job_name + '_scratch'))
             shutil.copy(nameinp+'.inp', work_dir)
             shutil.copy(nameSUBR, work_dir)
-            
+            # sys.exit()
             if control==0:
                 # CRACK PROPAGATION AND ARREST STAGE: displacement control
                 # -------------------------------------------------------------
@@ -1125,6 +1153,11 @@ while (k<=numiter):
                     # export the files into the new directory
                     for f in export_fil:
                         shutil.copy(f, work_dirkm)
+                    for Dn in range(1,len(Uinterprops)+1):
+                        nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                        job_name = '{}'.format(nameinpDNk)
+                        work_dir = job_name + '_scratch'
+                        shutil.rmtree(work_dir)
                     """
                     # *************************************************************************
                     # NOTE: for any crack propagation step inside the loop, the load amplitude
@@ -1137,7 +1170,7 @@ while (k<=numiter):
                     # load vector preparation:
                     start = newload + float(0.05*newload)
                     end = 6.5*newload
-                    num = 25
+                    num = 27
                     power = float(2.25) # no bias towards the start
                     # Create a normalized linear space (0 to 1)
                     if num == 1:
@@ -1181,7 +1214,7 @@ while (k<=numiter):
                                 old_load=load_list[-1][0]
                                 # load_list.append(newld_iter)
                             if indx>0 and advance_iternum==1:
-                                newld_iter=value
+                                newld_iter = load_list[-1][0] + 2.0*incre
                             
                             if indx==0: 
                                 oldjob_name = odbdef
@@ -1343,7 +1376,7 @@ while (k<=numiter):
                                 load_list.append([newld_iter, 1])
                                 incre = abs(newld_iter-old_load)
                                 newld_iter = newld_iter + 2.0*incre
-                                
+                                last_iter = advance_iternum
                                 inpfil_name = odbdef+'_m'+str(indx+2)+'_bisiter_'+str(1)
                                 inp_filename = create_crack_restart_inp(inpfil_name, n+1, newld_iter)
                                 if os.path.exists(work_dirkm+'\\'+inp_filename):
@@ -1352,9 +1385,16 @@ while (k<=numiter):
                                     shutil.move(inp_filename, work_dirkm)
                                 oldjob_base = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
                                 odb_file = odbdef+'_m'+str(indx+1)+'_bisiter_'+str(advance_iternum)
+                                # ADVANCE ITERATION POSTPROCESS
+                                enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(work_dirkm+'//'+odb_file,control,cadenanombreSDV,work_dirkm)
+                                # model_outputfile(actual_directory,sim_file,k,11,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
+                                # datos_salida.append([float(val),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),job_name,len(NeL2damagetotalN)])
+                                # stepdata.append([k,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][5]])
+                                KDn_outputfile(actual_directory,Dirname,k,1,enerHtotalN,sumaenerinterN,len(NeL2damageKN),tf,energy_evol)
+                                
                                 chdir(work_dirkm)
                                 # List of file extensions to delete
-                                extensions_to_delete = ['*.sim', '*.com', '*.jnl'\
+                                extensions_to_delete = ['*.sim', '*.com', '*.jnl','*.txt','*.png','*.dat'\
                                                 '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.fil']
                                 for ext in extensions_to_delete:
                                     # glob.glob finds all files matching the pattern
@@ -1365,13 +1405,14 @@ while (k<=numiter):
                                             "  - Deleted: {}".format(f)
                                         except OSError as e:
                                             "  - Error deleting file {}: {}".format(f, e)
-                                # advance_iternum += 1
-                                # ADVANCE ITERATION POSTPROCESS
-                                # enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(job_name,control,cadenanombreSDV,work_dirkm)
-                                # model_outputfile(actual_directory,sim_file,k,11,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
-                                # datos_salida.append([float(val),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),job_name,len(NeL2damagetotalN)])
-                                # stepdata.append([k,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][5]])
-                                # KDn_outputfile(actual_directory,Dirname,k,11,enerHtotalN,sumaenerinterN,len(NeL2damageKN),tf,energy_evol)
+                                # Remove unnecessary files for each iteration but the last one
+                                for iterindx in range(1,advance_iternum):
+                                    iter_filename=odbdef+'_m'+str(indx+1)+'_bisiter_'+str(iterindx)
+                                    del_list = [iter_filename+'.stt',iter_filename+'.res',iter_filename+'.mdl',
+                                                iter_filename+'.prt',iter_filename+'.msg',iter_filename+'.odb',iter_filename+'.inp']
+                                    for file in del_list:
+                                        os.remove(file)
+                                # Change to the current working directory
                                 chdir(actual_directory)
                                 break
                             
@@ -1497,7 +1538,7 @@ while (k<=numiter):
                     # job preparation:
                     start = newload + float(0.025*newload)
                     end = 5.25*newload
-                    num = 45
+                    num = 25
                     power = float(1)  # Bias towards the start
                     # 1. Create a normalized linear space (0 to 1)
                     if num == 1:
@@ -1517,6 +1558,360 @@ while (k<=numiter):
                     # ((0,value),(1.0,value)), consistent with crack initiation steps,
                     # which will enable a most precise crack advance load prediction.
                     # *************************************************************************
+                    def PMTESCcritEneSubrV2(name_files,control,cadenanombreSDV, workdir):
+                        chdir(workdir)
+                        odb = openOdb(name_files + '.odb')    
+                        odbv = session.openOdb(name_files + '.odb')
+                        myAssembly = odb.rootAssembly
+                        #--------------------------------------------------------------------------
+                        #||||||||||||| DEFINICION DE CAMINOS DE VARIABLES EN ABAQUS         |||||||||||||||
+                        #--------------------------------------------------------------------------  
+                        key_step = odb.steps.keys()
+                        lastFrame = odb.steps[key_step[0]].frames[-1]
+                        #path_despl=odb.steps[key_step[0]].frames[-1].fieldOutputs['U'].\
+                        #    getSubset(region=InterNodeSet).values
+                        path_SDV1=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV1     '+cadenanombreSDV].values
+                        nodeglob=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV2     '+cadenanombreSDV].values
+                        # path_SDV7=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV7     '+cadenanombreSDV].values  
+                        # path_SDV8=odb.steps[key_step[0]].frames[-1].fieldOutputs ['SDV8     '+cadenanombreSDV].values 
+                        path_SDV11=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV11    '+cadenanombreSDV].values
+                        path_SDV12=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV12    '+cadenanombreSDV].values
+                        t2tc=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV21    '+cadenanombreSDV].values
+                        tcrit=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV22    '+cadenanombreSDV].values
+                        GtotE=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV7     '+cadenanombreSDV].values
+                        GcE=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV8     '+cadenanombreSDV].values
+                        # damT=odb.steps[key_step[0]].frames[-1].fieldOutputs['SDV9     '+cadenanombreSDV].values
+                        
+                        # nodecnt=0 #node counter of nodes which define stress condition
+                        Asigma_lst=[] #empty list where to store the interface vars. that define Asigma
+                        # for loop of interface nodes:
+                        for node in range(len(nodeglob)):
+                            if t2tc[node].data>1.0:
+                                # nodect+=1
+                                Asigma_lst.append([nodeglob[node].data,t2tc[node].data,tcrit[node].data,GtotE[node].data])
+                        if len(Asigma_lst)!=0:
+                            # print(np.array(Asigma_lst))
+                            # ***RANDOM SHUFFLING OF ROWS IN THE Asigma_lst LIST***:
+                            # Asetcrit=random.sample()
+                            # convert the list into a numpy data array:
+                            Asetcritres=np.array(Asigma_lst)
+                            # numpy random normal distribution:
+                            p=0.0 # 0, 0.1, 0.2, 0.3,...constant of multiplication
+                            sigma=1 #standard deviation: 0.25, 0.5, 1,...
+                                
+                            chirandomv2 = np.random.normal(0,sigma,len(Asigma_lst))
+                            tc_rand = Asetcritres[:,2]*(np.ones(len(Asetcritres[:,2])) + float(p)*chirandomv2)
+                            tc_rand[tc_rand < 0]=1E-5
+                            t2tcx = (Asetcritres[:,1]*Asetcritres[:,2])/(tc_rand)
+                            # print(t2tcx, len(t2tcx))
+                            # Make a new Asetcrit array and concatenate the t2tcx 1D vector on the last
+                            # column; then convert the array into a list and sort it using the new t/tc data
+                            Asetcrit_new = np.concatenate([Asetcritres, t2tcx.reshape(len(t2tcx),1)], axis=1)
+                            Asetcrit=list(Asetcrit_new)
+                            # SORT THE UPDATED LIST IN DESCENDING ORDER OF T_X/TC_RAND
+                            Asetcrit.sort(key=lambda Asetcrit:Asetcrit[:][-1],reverse=True)
+                            # Save the array as a text file:
+                                # Specify the format for each column
+                            fmt = ['%d', '%.15e', '%.15e', '%.6e', '%.15e']
+                            # header=''
+                            # np.savetxt(name_files+'Asetcrit.txt', Asetcrit, fmt=fmt, delimiter='\t')
+                        else: print('A_sigma set is empty')
+                        
+                        # concentrated force OR disp. extraction:
+                        dcbtoparm = odb.rootAssembly.nodeSets['TOPN']
+                        # control point dispalcement extraction:
+                        if control==0:
+                            tf_field=lastFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+                            dcbtf2_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
+                        elif control!=0:
+                            # concentrated force extraction:
+                            tf_field=lastFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+                            tf_fieldlst = [fv.data for fv in tf_field.values]
+                            # tf_field=tf_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data
+                            dcbtf2_field = sum(tf_fieldlst)
+                        #para sacar la energia	
+                        key_HisReg = odb.steps[key_step[0]].historyRegions.keys()
+                        path_HisRegEne = odb.steps[key_step[0]].historyRegions[key_HisReg[0]]
+                        
+                        sumaenerinter=0.00
+                        NeL2damagetotal=[]
+                        NeL2damageK=[]
+                        
+                        for k in range(len(path_SDV1)):
+                            damage=path_SDV1[k].data
+                            NeG=path_SDV1[k].nodeLabel
+                            damageKmenos1=path_SDV11[k].data
+                            GtE=GtotE[k].data
+                            GcrE=GcE[k].data
+                            areacontacto=path_SDV12[k].data
+                            sumaenerinter=sumaenerinter+(GtE*areacontacto)+(GcrE*areacontacto)
+                            if damage==1.0:
+                                NeL2damagetotal.append(NeG)
+                                if damageKmenos1==0.0:          
+                                    NeL2damageK.append(NeG)
+                                
+                        #--------------------------------------------------------------------------
+                        #Energia de todo el sistema en el setp=j
+                        whole_model_region = odb.steps[key_step[0]].historyRegions['Assembly ASSEMBLY']
+                        allwk_history = whole_model_region.historyOutputs['ALLWK']
+                        allse_history = whole_model_region.historyOutputs['ALLSE']
+                        # Work = 2*(path_HisRegEne.historyOutputs['ALLWK'].data[-1][1])
+                        # eneDefSolidos = path_HisRegEne.historyOutputs['ALLSE'].data[-1][1]
+                        #tomamos 'ALLSE' en lugar de 'ALLIE' porque estrictamente es la energia de deformacion
+                        #pero podemos replantearnos poner la otra por el hourglassing
+                        # if control==1:
+                        #     eneHtotal = eneDefSolidos+sumaenerinter-Work
+                        # else:
+                        #     eneHtotal = eneDefSolidos+sumaenerinter
+                    #
+                        # Loop over all steps in the odb
+                        for step_name in odb.steps.keys():
+                            # Initialize a list to store the results
+                            energy_data = []
+                            # print(f"Processing Step: {step_name}...")
+                            step = odb.steps[step_name]
+                            # Get the history region for the whole model from the STEP object
+                            # This is where whole-model energy variables are stored.
+                            whole_model_region = step.historyRegions['Assembly ASSEMBLY']
+                            allwk_history = whole_model_region.historyOutputs['ALLWK']
+                            allse_history = whole_model_region.historyOutputs['ALLSE']
+                            
+                            Uel_frame=[]
+                            PI_frame=[]
+                            deltaR_frame=[]
+                            Ut_frame=[]
+                            
+                            # Extract total potential energy at the end of first increment:
+                            for frame in step.frames:
+                                currentFrame = step.frames[frame.frameId]
+                                if frame.frameId==1:
+                                    # initialize interface energy to zero at each increment:
+                                    interf_strnenergy=float(0)
+                                    interf_energdiss=float(0)
+                                    # initialize fracture surface defined by stress condition:
+                                    area_stressc=float(0)
+                                    atotal=float(0)
+                                    # initialize fracture surface fulfilling the coupled criterion FFM:
+                                    area_ccffm=float(0)
+                                    
+                                    path_SDV1=currentFrame.fieldOutputs['SDV1     '+cadenanombreSDV].values
+                                    GtotE=currentFrame.fieldOutputs['SDV7     '+cadenanombreSDV].values
+                                    GcE=currentFrame.fieldOutputs['SDV8     '+cadenanombreSDV].values
+                                    damT=currentFrame.fieldOutputs['SDV9     '+cadenanombreSDV].values
+                                    damE=currentFrame.fieldOutputs['SDV10    '+cadenanombreSDV].values
+                                    allse_value = allse_history.data[frame.frameId][1]
+                                    ut_value = float(0)
+                                    tforce_field = []
+                                    ut_field=currentFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+                                    ut_value=abs(ut_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data)
+                                    Ut_frame.append(ut_value)
+                                    for k in range(len(path_SDV1)):
+                                        GtE=GtotE[k].data
+                                        GcrE=GcE[k].data
+                                        damTval=damT[k].data
+                                        damEval=damE[k].data
+                                        areacontacto=path_SDV12[k].data
+                                        atotal=areacontacto+atotal
+                                        # if path_SDV1[k].data==float(0): #active spring
+                                        interf_strnenergy=interf_strnenergy + (GtE*areacontacto)
+                                        # else: #broken spring
+                                        #     interf_strnenergy=interf_strnenergy
+                                        # Stress criterion fulfilled:
+                                        if damTval==1.:
+                                            area_stressc = area_stressc + areacontacto
+                                        # CCFFM criterion:
+                                        if damTval==1. and damEval==1.:
+                                            area_ccffm = area_ccffm + areacontacto
+                                            interf_energdiss=interf_energdiss + (GcrE*areacontacto)
+                                    # concentrated force extraction:
+                                    tforce=currentFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+                                    tforce_field = [fv.data for fv in tforce.getSubset(region=dcbtoparm,position=NODAL).values]
+                                    totalf_field = 2*abs(sum(tforce_field))
+                                    # at frame=1, elastic strain energy='ALLWK', which is also valid
+                                        # for a geometric nonlinear static analysis
+                                    if control==1:
+                                        PI0 = (allwk_history.data[frame.frameId][1]) - (totalf_field*ut_value)
+                                    else:
+                                        PI0 = (allwk_history.data[frame.frameId][1])
+                                    print('PI_0: ',PI0)
+                                    
+                            # Loop over all frames (increments) in the current step:
+                            for frame in step.frames:
+                                currentFrame = step.frames[frame.frameId]
+                                # initialize interface energy to zero at each increment:
+                                interf_strnenergy=float(0)
+                                interf_energdiss=float(0)
+                                # initialize fracture surface defined by stress condition:
+                                area_stressc=float(0)
+                                atotal=float(0)
+                                # initialize fracture surface fulfilling the coupled criterion FFM:
+                                area_ccffm=float(0)
+                                path_SDV1=currentFrame.fieldOutputs['SDV1     '+cadenanombreSDV].values
+                                # nodeglob=frame.fieldOutputs['SDV2     '+cadenanombreSDV].values
+                                # path_SDV11=frame.fieldOutputs['SDV11    '+cadenanombreSDV].values
+                                path_SDV12=currentFrame.fieldOutputs['SDV12    '+cadenanombreSDV].values
+                                # t2tc=frame.fieldOutputs['SDV21    '+cadenanombreSDV].values
+                                # tcrit=frame.fieldOutputs['SDV22    '+cadenanombreSDV].values
+                                GtotE=currentFrame.fieldOutputs['SDV7     '+cadenanombreSDV].values
+                                GcE=currentFrame.fieldOutputs['SDV8     '+cadenanombreSDV].values
+                                damT=currentFrame.fieldOutputs['SDV9     '+cadenanombreSDV].values
+                                damE=currentFrame.fieldOutputs['SDV10    '+cadenanombreSDV].values
+                                for k in range(len(path_SDV1)):
+                                    GtE=GtotE[k].data
+                                    GcrE=GcE[k].data
+                                    damTval=damT[k].data
+                                    damEval=damE[k].data
+                                    areacontacto=path_SDV12[k].data
+                                    atotal=areacontacto+atotal
+                                    # if path_SDV1[k].data==float(0): #active spring
+                                    interf_strnenergy=interf_strnenergy + (GtE*areacontacto)
+                                    # else: #broken spring
+                                    #     interf_strnenergy=interf_strnenergy
+                                        
+                                    # Stress criterion fulfilled:
+                                    if damTval==1.:
+                                        area_stressc = area_stressc + areacontacto
+                                    # CCFFM criterion:
+                                    if damTval==1. and damEval==1.:
+                                        area_ccffm = area_ccffm + areacontacto
+                                        interf_energdiss=interf_energdiss + (GcrE*areacontacto)
+                                        # interf_strnenergy=interf_strnenergy - (GcrE*areacontacto)
+                                        # print(path_SDV1[k].data,interf_strnenergy,interf_energdiss)
+                                #
+                                allse_value = allse_history.data[frame.frameId][1]
+                                ut_value = float(0)
+                                tforce_field = []
+                                ut_field=currentFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+                                ut_value=abs(ut_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data)
+                                Ut_frame.append(ut_value)
+                                
+                                # concentrated force extraction:
+                                tforce=currentFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+                                tforce_field = [fv.data for fv in tforce.getSubset(region=dcbtoparm,position=NODAL).values]
+                                totalf_field = 2*abs(sum(tforce_field))
+                                
+                                deltaR_frame.append(interf_energdiss)
+                                delR=deltaR_frame[-1]
+                                if control==1:
+                                    whole_model_region = step.historyRegions['Assembly ASSEMBLY']
+                                    allwk_history = whole_model_region.historyOutputs['ALLWK']
+                                    allse_history = whole_model_region.historyOutputs['ALLSE']
+                                    # interf_strnenergy = allwk_history.data[frame.frameId][1] - allse_history.data[frame.frameId][1]
+                                    # PIf = (allse_history.data[frame.frameId][1]+interf_strnenergy) - (totalf_field*ut_value)
+                                    if frame.frameId<=1:
+                                        wpot = totalf_field*ut_value
+                                        totalPotenergy = (allse_history.data[frame.frameId][1]+interf_strnenergy)-wpot
+                                        # totalPotenergy = -0.5*(wpot)
+                                        # totalPot0 = (allwk_history.data[frame.frameId][1])-wpot
+                                        PI_frame.append(totalPotenergy)
+                                        if frame.frameId==1 and PI_frame[0]!=float(0):
+                                            PI0 = PI_frame[0]
+                                            delPI=PI_frame[-1]-PI_frame[0]
+                                        else: delPI = float(0); delR=float(0)
+                                        
+                                    else:
+                                        wpot = totalf_field*ut_value
+                                        Uel_f = (allse_history.data[frame.frameId][1]+interf_strnenergy)
+                                        totalPotenergy = Uel_f - wpot
+                                        # totalPotenergy = -0.5*(wpot)
+                                        PI_frame.append(totalPotenergy)
+                                        delPI = totalPotenergy - PI0
+                                    Uel_frame.append(allse_history.data[frame.frameId][1]+interf_strnenergy)
+                                    
+                                    # print(PI_frame[-1],(allse_history.data[frame.frameId][1]+interf_strnenergy),-wpot)
+                                    energy_data.append([frame.frameId, totalPotenergy, allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm, 
+                                                        sum(tforce_field), ut_value])
+                                        
+                                else: #fixed-grips control:
+                                    # interf_strnenergy = allwk_history.data[frame.frameId][1] - allse_history.data[frame.frameId][1]
+                                    PIf = (allse_history.data[frame.frameId][1]+interf_strnenergy)
+                                    if frame.frameId==1: PI_frame.append(PIf)
+                                    else:   PI_frame.append(PIf)
+                                    
+                                    Uel_frame.append(allwk_history.data[frame.frameId][1])
+                                    if frame.frameId<=1:
+                                        if frame.frameId==1 and PI_frame[0]!=float(0):
+                                            delPI=PI_frame[-1]-PI_frame[0]
+                                        else: delPI = float(0); delR = float(0)
+                                        # else: delPI=PIf-PI0
+                                    elif frame.frameId>1 and PI_frame[0]!=float(0):
+                                        delPI=PI_frame[-1]-PI_frame[0]
+                                    elif frame.frameId>1 and PI_frame[0]==float(0):
+                                        delPI=PIf-PI0
+                                    energy_data.append([frame.frameId, PI_frame[-1], allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm,
+                                                        sum(tforce_field), ut_value])
+                                
+                                # The .data attribute for these objects is a tuple, e.g., (time, value)
+                                # We are interested in the value, which is at index 1.
+                                if frame.frameId<=1: 
+                                    # interf_strnenergy = allwk_history.data[frame.frameId][1] - allse_history.data[frame.frameId][1]
+                                    allwk0 = 1*allwk_history.data[frame.frameId][1]
+                                    allse0 = allse_history.data[frame.frameId][1]
+                                    if control==1:
+                                        totalPot0 = (allwk0) - (totalf_field*ut_value)
+                                        # totalPot0 = -0.5*(wpot)
+                                    else:
+                                        totalPot0 = allwk0
+                                    
+                                    # Append the extracted data as a list to our main list
+                                    # energy_data.append([frame.frameId, totalPot0, allse0, delPI, deltaR_frame[frame.frameId], 0.0, area_stressc, area_ccffm])
+                                    # print(frame.frameId,totalPot0,atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
+                                # else:
+                                #     ut_field=currentFrame.fieldOutputs['U'].getScalarField(componentLabel='U2',)
+                                #     ut_value=abs(ut_field.getSubset(region=dcbtoparm,position=NODAL).values[0].data)
+                                #     # concentrated force extraction:
+                                #     tforce=currentFrame.fieldOutputs['TF'].getScalarField(componentLabel='TF2',)
+                                #     tforce_field = [fv.data for fv in tforce.getSubset(region=dcbtoparm,position=NODAL).values]
+                                #     totalf_field = 2*abs(sum(tforce_field))
+                                    
+                                #     allwk_value = 1*allwk_history.data[frame.frameId][1]
+                                #     allse_value = allse_history.data[frame.frameId][1]
+                                #     
+                                
+                                    # print(frame.frameId, totalf_field, ut_value, PI_frame[-1], delPI)
+                                    # Append the extracted data as a list
+                                    # energy_data.append([frame.frameId, PI_frame[-1], allse_value, delPI, delR, delPI+delR, area_stressc, area_ccffm])
+                                    # print(frame.frameId,PI_frame[-1],atotal,area_stressc,area_ccffm,interf_energdiss,interf_strnenergy)
+                            # save the numpy energy evolution as a .txt file:
+                            tbl_format=['%d', '%.10e', '%.10e', '%.12e', '%.12e', '%.12e', '%.6e', '%.6e', '%.8e', '%.8e']
+                            np.savetxt(name_files+'_delPIdelRevol.txt', np.array(energy_data), delimiter='\t', fmt=tbl_format)
+                            # print('Total energy evolution array:')
+                            # print(np.array(energy_data))
+                        import displayGroupOdbToolset as dgo
+                        # Get the viewport
+                        viewport = session.viewports[session.currentViewportName]
+                        viewport.setValues(displayedObject=odbv)
+                        session.viewports['Viewport: 1'].view.setValues(session.views['Front'])
+                        session.viewports['Viewport: 1'].odbDisplay.display.setValues(plotState=(
+                            CONTOURS_ON_DEF, ))
+                        session.viewports['Viewport: 1'].odbDisplay.basicOptions.setValues(
+                            curveRefinementLevel=EXTRA_FINE)
+                        session.viewports['Viewport: 1'].odbDisplay.commonOptions.setValues(
+                            deformationScaling=UNIFORM, uniformScaleFactor=1)
+                        session.viewports['Viewport: 1'].odbDisplay.setPrimaryVariable(
+                            variableLabel='SDV1     ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF', 
+                            outputPosition=NODAL, )
+                        # session.viewports['Viewport: 1'].odbDisplay.setPrimaryVariable(
+                        #     variableLabel='SDV10    ASSEMBLY_TOP_SURF/ASSEMBLY_BOTTOM_SURF', 
+                        #     outputPosition=NODAL, )
+                        leaf = dgo.LeafFromPartInstance(partInstanceName=('BOTTOM ARM-1', ))
+                        session.viewports['Viewport: 1'].odbDisplay.displayGroup.remove(leaf=leaf)
+                        session.viewports['Viewport: 1'].view.setProjection(projection=PARALLEL)
+                        session.viewports['Viewport: 1'].view.setValues(session.views['Bottom'])
+                        session.viewports['Viewport: 1'].viewportAnnotationOptions.setValues(
+                            compass=OFF)
+                        session.viewports['Viewport: 1'].odbDisplay.contourOptions.setValues(
+                            numIntervals=2, maxValue=0, minValue=0)
+                        session.viewports['Viewport: 1'].view.setValues(nearPlane=493.329, 
+                            farPlane=508.291, width=71.6097, height=24.2584, cameraPosition=(
+                            219.901, -499.005, 5.99311), cameraTarget=(219.901, 1.80515, 5.99311))
+                        session.pngOptions.setValues(imageSize=(1600, 712))
+                        session.printOptions.setValues(vpDecorations=OFF, vpBackground=ON)
+                        session.printToFile(
+                            fileName=str(name_files)+'.png', 
+                            format=PNG, canvasObjects=(session.viewports['Viewport: 1'], ))
+                        odb.close()
+                        return energy_data[-1][5],interf_strnenergy,NeL2damageK,NeL2damagetotal,dcbtf2_field,energy_data
                     for index, val in enumerate(load_vector):
                         os.chdir(actual_directory)
                         # if index==0:
@@ -1729,12 +2124,23 @@ while (k<=numiter):
                         print ("--- Iteration {} complete. ---".format(job_name))
                         # ADVANCE ITERATION POSTPROCESS
                         # change to the crack advance working dir.
-                        os.chdir(work_dirkm)
-                        enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCabaqusV0.PMTESCcritEneSubr(job_name,control,cadenanombreSDV,work_dirkm)
+                        chdir(work_dirkm)
+                        enerHtotalN,sumaenerinterN,NeL2damageKN,NeL2damagetotalN,tf,energy_evol=PMTESCcritEneSubrV2(job_name,control,cadenanombreSDV,work_dirkm)
                         model_outputfile(actual_directory,sim_file,k,11,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol)
                         datos_salida.append([float(val),float(tf),float(enerHtotalN),sumaenerinterN,len(NeL2damageKN),job_name,len(NeL2damagetotalN)])
                         stepdata.append([k,val,tf,enerHtotalN,sumaenerinterN,len(NeL2damageKN),len(NeL2damagetotalN),energy_evol[-1][5]])
                         KDn_outputfile(actual_directory,Dirname,k,11,enerHtotalN,sumaenerinterN,len(NeL2damageKN),tf,energy_evol)
+                        # Delete unnecessary simulation files:
+                        # 
+                        inp_file = os.path.join(work_dirkm, job_name + '.inp')
+                        mdl_file = os.path.join(work_dirkm, job_name + '.mdl')
+                        prt_file = os.path.join(work_dirkm, job_name + '.prt')
+                        res_file = os.path.join(work_dirkm, job_name + '.res')
+                        odb_file = os.path.join(work_dirkm, job_name + '.odb')
+                        stt_file = os.path.join(work_dirkm, job_name + '.stt')
+                        delete_list = [inp_file]
+                        for item in delete_list:
+                            os.remove(item)
                         iternum += 1
                         
                     print("--- Sequential analysis complete. ---")
@@ -1987,6 +2393,11 @@ while (k<=numiter):
                                '*.mtx','*.pes','*.par','*.pmg','*.ipm','*.pyc','*.res','*.mdl','*.stt','*.fil')
                 borrar_archivos(list_delete)
                 chdir(actual_directory)
+                for Dn in range(1,len(Uinterprops)+1):
+                    nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                    job_name = '{}'.format(nameinpDNk)
+                    work_dir = job_name + '_scratch'
+                    shutil.rmtree(work_dir)
                 end = time.time()
                 print('Program has terminated in %.2f' %((end-start)/60)+' min')
                 sys.exit()
@@ -2141,7 +2552,11 @@ while (k<=numiter):
                 list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                                '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
                 borrar_archivos(list_delete)
-        
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = job_name + '_scratch'
+                shutil.rmtree(work_dir)
         elif k>2 and NeL2damagek!=0 and stepdata[-1][-1]>0 and k<=numiter:
             print(k, Fk, incre, eps0, NeL2damagek, stepdata[-1][-1])
             incre = (Fk-Fkm1)
@@ -2186,7 +2601,11 @@ while (k<=numiter):
                 list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                                '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
                 borrar_archivos(list_delete)
-
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = job_name + '_scratch'
+                shutil.rmtree(work_dir)
         elif k>2 and NeL2damagek==0 and (k<=numiter):
             print(k, Fk, incre, eps0, NeL2damagek, NeL2damagekm1)
             incre = abs(Fk-Fkm1)
@@ -2229,7 +2648,11 @@ while (k<=numiter):
                 list_delete = ('*.sta', '*.dat', '*.sim', '*.prt', '*.msg', '*.com', '*.jnl',\
                                '*.mtx','*.pes','*.par','*.pmg','*.odb','*.ipm','*.pyc','*.res','*.mdl','*.stt')
                 borrar_archivos(list_delete)
-
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = job_name + '_scratch'
+                shutil.rmtree(work_dir)
         if k>numiter:
             if godb==1:
                 list_odbs=(['*_K'+str(k-1)+'.odb','*_K'+str(k-1)+'.inp','*_K'+str(k)+'.odb',
@@ -2238,6 +2661,11 @@ while (k<=numiter):
                 #borramos el resto de archivos de ese paso                                          
                 list_delete = (['*_K'+str(k-1)+'.*','*'+str(k-1)+'.inp'])
                 borrar_archivos(list_delete)
+            for Dn in range(1,len(Uinterprops)+1):
+                nameinpDNk=nameinp+str(k-1)+'_N'+str(Dn)+'_K'+str(k)
+                job_name = '{}'.format(nameinpDNk)
+                work_dir = job_name + '_scratch'
+                shutil.rmtree(work_dir)
             end = time.time()
             print('Program aborted, number of steps exceeded the iteration limit')
             print('Program has terminated in %.2f' %((end-start)/60)+' min')
