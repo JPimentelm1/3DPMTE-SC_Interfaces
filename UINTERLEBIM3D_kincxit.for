@@ -43,13 +43,34 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
           implicit none
 
           integer, parameter :: rk = kind ( 1.0D+00 )
-
+            
           real ( kind = rk ) r1
           real ( kind = rk ) r2
           real ( kind = rk ) r8_normal_01
           real ( kind = rk ), parameter :: r8_pi = ACOS(-1.0d0)
           real ( kind = rk ) x
-
+          ! Variables for seeding
+          LOGICAL, SAVE :: first_call = .TRUE.
+          INTEGER :: i, n, clock_val
+          INTEGER, ALLOCATABLE :: seed_array(:)
+          
+            ! --- SEEDING LOGIC (Runs only once) ---
+            IF (first_call) THEN
+            ! Get size of seed array for this compiler
+                CALL RANDOM_SEED(SIZE=n)      
+                ALLOCATE(seed_array(n))
+                CALL SYSTEM_CLOCK(COUNT=clock_val) ! Get machine time
+                
+                DO i = 1, n
+                ! Create a unique seed array
+                    seed_array(i) = clock_val + i * 37 
+                END DO
+                
+                CALL RANDOM_SEED(PUT=seed_array)
+                DEALLOCATE(seed_array)
+                first_call = .FALSE.
+            END IF
+        
           call random_number ( harvest = r1 )
           call random_number ( harvest = r2 )
           x = sqrt ( - 2.0D+00 * log ( r1 ) ) *
@@ -116,7 +137,7 @@ C --- Use a dynamically allocatable array to store failed node IDs
       INTEGER, SAVE :: numFailedNodes = 0
       INTEGER, SAVE :: capacity = 0
       LOGICAL :: isAlreadyFailed
-      !maximum of 500 step increments:
+      ! maximum of 500 step increments:
       REAL*8 KINC_failn(500,2), KINC_failnm1(500,2) 
       REAL*8 :: FAILED_DATA(MAX_FAILED,10), mint2tc, maxt2tc, mingte2gc,
      &          maxgte2gc, deltagt2gc, tcrand, randr8, prand, randnr8
@@ -126,10 +147,10 @@ C --- Use a dynamically allocatable array to store failed node IDs
      &        mingte2gc, maxgte2gc, deltagt2gc, deltat2tc, tcrand, 
      &        KINC_failnm1
       DATA CALLED /.FALSE./
-      TOLER = 1.0D-3
+      
 C     END OF DATA DECLARATION BLOCK      
 C     ---------------------------------------------------------------
-      
+      TOLER = 1.0D-4
       ! Initialize on first call
       IF (INIT_FLAG .EQ. 0) THEN
           NODNUM = 0
@@ -167,9 +188,10 @@ c      !READ THE MATERIAL PROPERTIES FROM THE INPUT FILE
       Nini = PROPS(8)
 C     Force:(1) or displacement:(0) control
       control = PROPS(9)
-      
+C      WRITE(*,*) 'PROPS(9) = ', control 
+C      WRITE(*,'(A,I0)') 'NINT(PROPS(9)) = ', NINT(control)
 !cccccccccccccccccccccccccc inicializacion de variables
-      prand = ZERO
+      prand = ONE/FOUR
       Pi=ACOS(-ONE)
       GiT=0.0d0
       GiiT=0.0d0
@@ -286,8 +308,10 @@ c     al final de la iteración
 cccccc calculo de la energia critica en la primera iteracion para el CT y el CE     
       if (KINC.EQ.1) then
 c     en la UINTER el desplazamiento de despegue es negativo y contacto positivo   
-        psig1=datan2(taun*dsqrt(Knn/Ktt1),STRESS(1))
+        psig1=datan2(taun*dsqrt(Knn/Ktt1),ABS(STRESS(1)))
+C        psig2=datan2(STRESS(3)*dsqrt(Knn/Ktt2),-STRESS(1))
 	  psiGcrit1=pi/(2.d0*(1.d0-lambda1))
+C        psiGcrit2=pi/(2.d0*(1.d0-lambda2))
         !No damage condition !!!!!!REVISAR SI ESTA BIEN
         IF (psig1.gt.psiGcrit1) then
         GcT = GIct*1d8 
@@ -301,7 +325,7 @@ c     calculo de energia total en la primera iteracion para el CT y ese debe ser
         ELSE
             GtotT=GiiT+GiiiT
         ENDIF
-      else
+      else 
 c     si NO es la primera iteracion se debe tomar las energias criticas y 
 c     la energia total de CT (sustituye al vector tension) de las variables de estado
 c     porque es igual que tomarlo de la primera ITR.
@@ -316,7 +340,7 @@ c     sume a la energia disipada cuando abramos el odb en el script de python
 	endif
 C     traction vector norm:
       t = DSQRT(STRESS(1)**2.d0 + taun**2.d0)
-      
+
 C     normal critical strength:     
       sigmac=(DSQRT(2*GIct*KnnE))*
      @DSQRT((1.d0+(dtan(psig1*(1.d0-lambda1)))**2.d0))*DCOS(psig1)
@@ -352,15 +376,15 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
       !si estamos al final en el primer incremento
       
         ! Estimate when the first increment ends            
-	  if ((KINC*KSTEP.EQ.KSTEP)) then
+	  IF ((KINC*KSTEP.EQ.KSTEP)) THEN
 	      TARGET_TIME = TIME(1) + DTIME
 	      IF ((GtotT.GE.Gct)) THEN !cumple CT
                 damageT=ONE !entonces el nodo esta dagando por CT
                 NODNUM = NODNUM + damageT
-	          ! Store vars in array
 	          CALL RANDOM_SEED(NODE)
 !	          CALL RANDOM_NUMBER(randr8)
 	          randnr8 = r8_normal_01( )
+	          ! Store vars in array
                 IF (NODNUM < MAX_FAILED) THEN
                   FAILED_DATA(NODNUM, 1) = NODNUM
                   FAILED_DATA(NODNUM, 2) = NODE
@@ -370,8 +394,9 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
                   FAILED_DATA(NODNUM, 8) = GtotT/Gct
                   FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
                   tcrand = Gct*FAILED_DATA(NODNUM, 9)
-                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
-                  FAILED_DATA(NODNUM, 10) = GtotT/tcrand
+                  tc = tcrand
+                  if (tcrand.LT.ZERO) tc = 1.0D-4
+                  FAILED_DATA(NODNUM, 10) = GtotT/tc
                 ENDIF
 	          
 	          mint2tc=MINVAL(FAILED_DATA(:,10))
@@ -384,8 +409,8 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
 
 !	          IF (NODNUM.GT.0) THEN
                 
-                    IF (GtotT/tcrand.GE.(mint2tc+(ZERO*(deltat2tc)))
-     &              .and.abs(Nini-ONE).le.1d-18) THEN
+                IF (GtotT/tcrand.GE.(mint2tc+(ZERO*(deltat2tc)))
+     &          .and.abs(Nini-ONE).le.1d-18) THEN
                 damageE=ONE
 !                    if (NODE.EQ.FAILED_DATA(i,2)) then
 !                write(*,*) NODE, t/tc, GtotE/tcrand, NINT(damageE)
@@ -455,20 +480,20 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
 !                else
 !                    write(*,*) NODE, t/tc, NINT(damageE)
 
-                endif
-!                    
-!                ENDIF
-                
-            ENDIF  
-             
-            IF ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18)) 
-     &      THEN
-              damage=ONE
-            ELSE
-              damage=ZERO
-            ENDIF      
-            !ya se termina el CT y se fija para 
-            !el resto de pasos j con la statev(11)
+            ENDIF
+            IF (control.EQ.1) THEN
+                IF ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18))
+     &          THEN
+                damage=ONE
+C     	          WRITE(*,*) KINC, NODE, damage
+                ELSE
+                damage=ZERO
+                ENDIF      
+                !ya se termina el CT y se fija para 
+                !el resto de pasos j con la statev(11)
+            ENDIF
+            
+        ENDIF            
       
 c     al final de cualquier j diferente de 1, se evalua el damageE porque CT ya esta evaluado
  	  ELSE IF (KINC.GT.ONE) THEN
@@ -483,7 +508,11 @@ c           CC-FFM:
  	      damage=ZERO
  	      NODECC=NODECC+ONE
             KINC_failn(KINC,1)=KINC !
-            KINC_failn(KINC,2)=ALLWKv
+            IF (control.EQ.0) THEN
+                KINC_failn(KINC,2)=ALLSEv
+            ELSE
+                KINC_failn(KINC,2)=-ALLWKv
+            END IF
             KINC_failnm1(KINC,1)=KINC
             KINC_failnm1(KINC,2)=NODECC
             IF (KINC.GT.3) THEN
@@ -499,7 +528,7 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
 !                CLOSE(30)
                 
                 WRITE(*,*) 'ALLSE at increment',KINC,':',
-     &          ALLWKv, ALLSEv
+     &          ALLWKv, ALLSEv, control
                 WRITE(*,*) damage,KINC_failn(kinc,1),KINC_failn(kinc,2)
                 WRITE(*,*)'UINTER: dam0, CONVERGENCE MET; EXIT.'
                 CALL XIT()
@@ -517,7 +546,11 @@ C       simultaneous fulfillment of nodal stress- and energy- criterion:
 ! 	      GcE=Gct*mu
 ! 	      NODECC=NODECC+damage
             KINC_failn(KINC,1)=KINC !
-            KINC_failn(KINC,2)=ALLWKv
+            IF (control.EQ.0) THEN
+                KINC_failn(KINC,2)=ALLSEv
+            ELSE
+                KINC_failn(KINC,2)=-ALLWKv
+            END IF
             IF (KINC.GT.3) THEN
                 eps0=ABS(KINC_failn(kinc,2)-KINC_failn(kinc-1,2))/
      &          KINC_failn(kinc,2)
@@ -525,157 +558,138 @@ C       simultaneous fulfillment of nodal stress- and energy- criterion:
      &          ALLWKv, ALLSEv
 
 C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
-                IF ((eps0.LT.toler).AND.(endflag.EQ.TRUE).AND.
-     &          (control.GE.ZERO)) THEN
+                IF ((eps0.LT.toler).AND.(endflag.EQ.TRUE)) THEN
                 WRITE(*,*) 'ALLSE at increment',KINC,':',
-     &          ALLWKv, ALLSEv
+     &          ALLWKv, ALLSEv, control
                 WRITE(*,*) damage,KINC_failn(kinc,1),KINC_failn(kinc,2)
                 WRITE(*,*) 'UINTER: dam1, CONVERGENCE MET; CRACK ONSET.'
+                CALL XIT()
 !                OPEN(UNIT=30, ACTION='READ',
 !     +          file=TRIM(program_path)//'\'//'eps0_value.txt',
 !     +          STATUS='OLD')
 !                READ(30,*) filesignl
 !                CLOSE(30)
-                    if (filesignl.EQ.ONE) then
-                    Ninip = ONE
-                    IF ((GtotT.GE.Gct)) THEN !cumple CT
-                damageT=ONE !entonces el nodo esta dagando por CT
-                NODNUM = NODNUM + damageT
-	          ! Store vars in array
-	          CALL RANDOM_SEED(NODE)
-!	          CALL RANDOM_NUMBER(randr8)
-	          randnr8 = r8_normal_01( )
-                IF (NODNUM < MAX_FAILED) THEN
-                  FAILED_DATA(NODNUM, 1) = NODNUM
-                  FAILED_DATA(NODNUM, 2) = NODE
-                  FAILED_DATA(NODNUM, 3) = t/tc
-                  FAILED_DATA(NODNUM, 4:6) = COORDS(1:3)
-                  FAILED_DATA(NODNUM, 7) = GtotT
-                  FAILED_DATA(NODNUM, 8) = GtotT/Gct
-                  FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
-                  tcrand = Gct*FAILED_DATA(NODNUM, 9)
-                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
-                  FAILED_DATA(NODNUM, 10) = GtotT/tcrand
-                ENDIF
-	          
-	          mint2tc=MINVAL(FAILED_DATA(:,10))
-	          maxt2tc=MAXVAL(FAILED_DATA(:,10))
-	          deltat2tc=(maxt2tc-mint2tc)
-	          mingte2gtc=MINVAL(FAILED_DATA(:, 8))
-	          maxgte2gtc=MAXVAL(FAILED_DATA(:, 8))
-	          deltagt2gc=maxgte2gtc-mingte2gtc
-!	          CALL SORT_FAILED_DATA(FAILED_DATA, NODNUM, 6)
-
-!	          IF (NODNUM.GT.0) THEN
                 
-                    IF (GtotT/tcrand.GE.(mint2tc+(ZERO*(deltat2tc)))
-     &              .and.abs(Ninip-ONE).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, GtotE/tcrand, NINT(damageE)
-!                    WRITE(*,*) int(FAILED_DATA(i,1)), 
-!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
-
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.10d0*(deltat2tc)))
-     &          .and.    abs(Ninip-TWO).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
+!                IF (filesignl.EQ.ONE) THEN
+!                Ninip = ONE
                 
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.20d0*(deltat2tc)))
-     &          .and.    abs(Ninip-three).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
+!                IF ((GtotT.GE.Gct)) THEN !cumple CT
+!                damageT=ONE !entonces el nodo esta dagando por CT
+!                NODNUM = NODNUM + damageT
+!	          ! Store vars in array
+!	          CALL RANDOM_SEED(NODE)
+!!	          CALL RANDOM_NUMBER(randr8)
+!	          randnr8 = r8_normal_01( )
+!                IF (NODNUM < MAX_FAILED) THEN
+!                  FAILED_DATA(NODNUM, 1) = NODNUM
+!                  FAILED_DATA(NODNUM, 2) = NODE
+!                  FAILED_DATA(NODNUM, 3) = t/tc
+!                  FAILED_DATA(NODNUM, 4:6) = COORDS(1:3)
+!                  FAILED_DATA(NODNUM, 7) = GtotT
+!                  FAILED_DATA(NODNUM, 8) = GtotT/Gct
+!                  FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
+!                  tcrand = Gct*FAILED_DATA(NODNUM, 9)
+!                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
+!                  FAILED_DATA(NODNUM, 10) = GtotT/tcrand
+!                ENDIF
+!	          mint2tc=MINVAL(FAILED_DATA(:,10))
+!	          maxt2tc=MAXVAL(FAILED_DATA(:,10))
+!	          deltat2tc=(maxt2tc-mint2tc)
+!	          mingte2gtc=MINVAL(FAILED_DATA(:, 8))
+!	          maxgte2gtc=MAXVAL(FAILED_DATA(:, 8))
+!	          deltagt2gc=maxgte2gtc-mingte2gtc                
+!                    IF (GtotT/tcrand.GE.(mint2tc+(ZERO*(deltat2tc)))
+!     &              .and.abs(Ninip-ONE).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, GtotE/tcrand, NINT(damageE)
+!!                    WRITE(*,*) int(FAILED_DATA(i,1)), 
+!!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
+!
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.10d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-TWO).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.20d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-three).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.30d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-four).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.40d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-five).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.50d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-six).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.60d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-seven).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.70d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-eight).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.80d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-nine).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.90d0*(deltat2tc)))
+!     &          .and.    abs(Ninip-ten).le.1d-18) THEN
+!                damageE=ONE
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!                
+!                ELSE IF (abs(Ninip-eleven).le.1d-18) THEN
+!                damageE=ZERO
+!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
+!!                write(*,*) NODE, t/tc, NINT(damageE)
+!!                WRITE(*,*) int(FAILED_DATA(i,1)), 
+!!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
+!!                else
+!!                    write(*,*) NODE, t/tc, NINT(damageE)
+!
+!                ENDIF
                 
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.30d0*(deltat2tc)))
-     &          .and.    abs(Ninip-four).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.40d0*(deltat2tc)))
-     &          .and.    abs(Ninip-five).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.50d0*(deltat2tc)))
-     &          .and.    abs(Ninip-six).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.60d0*(deltat2tc)))
-     &          .and.    abs(Ninip-seven).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.70d0*(deltat2tc)))
-     &          .and.    abs(Ninip-eight).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.80d0*(deltat2tc)))
-     &          .and.    abs(Ninip-nine).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.90d0*(deltat2tc)))
-     &          .and.    abs(Ninip-ten).le.1d-18) THEN
-                damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-                
-                ELSE IF (abs(Ninip-eleven).le.1d-18) THEN
-                damageE=ZERO
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-!                WRITE(*,*) int(FAILED_DATA(i,1)), 
-!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
-!                else
-!                    write(*,*) NODE, t/tc, NINT(damageE)
-
-                endif
-                
-            ENDIF  
-             
-            IF ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18)) 
-     &      THEN
- 	          damage=ONE
- 	      ELSE
- 	          damage=ZERO
- 	      ENDIF
+!            ENDIF  
  	      
- 	      IF ((GTOTE.GE.GCE)) THEN
- 	          damageE=ONE
- 	      ELSE
- 	          damageE=ZERO
- 	      END IF
- 	      
- 	      else
- 	              WRITE(*,*)'UINTER: dam1, CONVERGENCE MET; EXIT.'
- 	              WRITE(7,*)'UINTER: dam1, CONVERGENCE MET; EXIT.',KINC
-                    CALL XIT()
-                    endif
+! 	      ELSE
+!                WRITE(*,*)'UINTER: dam1, CONVERGENCE MET; EXIT.'
+!                WRITE(7,*)'UINTER: dam1, CONVERGENCE MET; EXIT.',KINC
+!                CALL XIT()
+!           ENDIF
+
                 KINC_failn(KINC,1)=KINC !
-                KINC_failn(KINC,2)=ALLWKv
+                IF (control.EQ.0) THEN
+                    KINC_failn(KINC,2)=ALLSEv
+                ELSE
+                    KINC_failn(KINC,2)=-ALLWKv
+                END IF
                 eps0=ABS(KINC_failn(kinc,2)-KINC_failn(kinc-1,2))/
      &          KINC_failn(kinc,2)
-
-
-C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
-                IF ((eps0.LT.toler).AND.(endflag.EQ.TRUE).AND.
-     &          (control.GE.ZERO)) THEN
-                WRITE(*,*)'UINTER: CONVERGENCE MET; EXIT.',KINC, control
-                WRITE(7,*)'UINTER: CONVERGENCE MET; EXIT.',KINC, control
-                CALL XIT()
-                ENDIF
                 
-                ENDIF
+            ENDIF
+            
             ENDIF
             
             IF ((KINC.GT.4).AND.(control.EQ.1)) THEN
@@ -685,13 +699,12 @@ C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
         ENDIF
         ENDIF !salimos de la evaluacion de damageT y del damageE
 
-        IF ((KINC.GT.4).AND.(all(FAILED_DATA(:,10).EQ.ZERO))) THEN
+        IF ((KINC.GT.3).AND.(all(FAILED_DATA(:,10).EQ.ZERO))) THEN
             ! FAILED_DATA array has not been updated
             WRITE(*,*) 'UINTER: stress cond. array is empty, exit.'
             CALL XIT()
         ENDIF
-        
-!        ENDIF      
+             
       !el final del bucle de damagemenosK. Garantiza la irreversibilidad
       ENDIF
 
@@ -743,7 +756,7 @@ c
       statev(18)=GiiT
       statev(19)=GiiiT
       statev(20)=RDISP(1)
-      statev(21)=t/tc
+      statev(21)=GtotT/tc
       statev(22)=tc
 	RETURN
 	
@@ -885,15 +898,13 @@ C     |||||||START OF UEXTERNALDB SUBROUTINE|||||||
 C     _____________________________________________
       SUBROUTINE UEXTERNALDB(LOP, LRESTART, TIME, DTIME, KSTEP, KINC)
       INCLUDE 'ABA_PARAM.INC'
+      INCLUDE 'my_common.inc'
       DIMENSION TIME(2)
 
       LOGICAL endflag
       COMMON /uext_var/ NODNUM, NODECC, endflag
       CHARACTER*256 OUTDIR, program_path
       COMMON /directory/ program_path
-      INTEGER recordedNodes(10000), numRecorded
-      COMMON /NODE_TRACK/ recordedNodes, numRecorded
-      
       IF (LOP.EQ.1) THEN
         numRecorded = 0
       END IF
@@ -904,12 +915,7 @@ C     _____________________________________________
         program_path=OUTDIR
         
       ENDIF
-!*********************************************************
-!      ANY ARRAY STORING THE DAMAGED INTERFACE NODE LABELS
-!     MUST BE UPDATED AT THE START OF EACH LOAD INCREMENT
-!     KINC, I.E., IT MUST BE INITIALIZED TO ZERO AFTER 
-!     THE INCREMENT HAS TERMINATED.
-!*********************************************************
+      
       IF ((LOP .EQ. 1).OR.(LOP .EQ. 2)) THEN
         ! Start/End of the increment, reset the node count:
         NODECC = 0.0d0
@@ -924,6 +930,7 @@ C     _____________________________________________
         endflag = .TRUE.
         CALL GETOUTDIR(OUTDIR, LENOUTDIR)
         program_path=OUTDIR
+        
       ELSE
         endflag = .FALSE.  
       ENDIF
@@ -957,15 +964,22 @@ C
 
 C----- Next increment begins -> stop scanning this increment
         IF (KEY .EQ. 2000) GOTO 110
-
+        
 C       Check if the record key is the one for total energies
         ! Check for history record key (e.g., key 1999 for energy)
            IF (KEY .EQ. 1999) THEN
 C             Extract the Total Strain Energies
+              WRITE(*,*) '--- Energy Record Found ---'
+              DO I=1,10
+                WRITE(*,*) 'ARRAY(', I, ') = ', ARRAY(I)
+              END DO
               ! ARRAY(3) may contain ALLSE value; verify via debugging
-              ALLSEv = ARRAY(6)
+              ALLSEv = ARRAY(4)
               ALLWKv = ARRAY(5)
-              WRITE(6,*) 'ALLSEv at increment ', KINC, ':',ALLSEv,ALLWKv
+              IF (KINC.GE.1) THEN
+              WRITE(*,*) 'ALLSEv at increment ', KINC,':',ALLSEv, ALLWKv
+              END IF
+              WRITE(6,*) 'ALLSEv at increment ', KINC,':',ALLSEv,ALLWKv
 C           Exit the loop
               GOTO 110
            END IF
