@@ -43,7 +43,7 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
           implicit none
 
           integer, parameter :: rk = kind ( 1.0D+00 )
-            
+
           real ( kind = rk ) r1
           real ( kind = rk ) r2
           real ( kind = rk ) r8_normal_01
@@ -70,7 +70,7 @@ CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
                 DEALLOCATE(seed_array)
                 first_call = .FALSE.
             END IF
-        
+            
           call random_number ( harvest = r1 )
           call random_number ( harvest = r2 )
           x = sqrt ( - 2.0D+00 * log ( r1 ) ) *
@@ -181,10 +181,9 @@ c      !READ THE MATERIAL PROPERTIES FROM THE INPUT FILE
       Ktt1 = PROPS(2)
       Ktt2 = PROPS(3)
       GIct = PROPS(4) !fracture energy associated to inf. crack growth
-
-      !Lambda de HS. No se utililiza si tomamos el criterio cuadratico
+      !Lambda HS. 
       lambda1 = PROPS(5) 
-      !Lambda de HS. No se utililiza si tomamos el criterio cuadratico
+      !Lambda HS.
       lambda2 = PROPS(6) 
       mu = PROPS(7)
       Nini = PROPS(8)
@@ -193,7 +192,7 @@ C     Force:(1) or displacement:(0) control
 C      WRITE(*,*) 'PROPS(9) = ', control 
 C      WRITE(*,'(A,I0)') 'NINT(PROPS(9)) = ', NINT(control)
 !cccccccccccccccccccccccccc inicializacion de variables
-      prand = ZERO
+      prand = 0.25d0
       Pi=ACOS(-ONE)
       GiT=0.0d0
       GiiT=0.0d0
@@ -205,17 +204,25 @@ C      WRITE(*,'(A,I0)') 'NINT(PROPS(9)) = ', NINT(control)
 !      cshapes=0 : stress-based
 !      cshapes=1 : energy-based
       cshapes=0 
-!cccccccccccccccccccccccccc INICIALIZAMOS EL DAGNO:
-c     Si estamos en k=1 y j=1, el damage y el damagemenosK debe ser cero
-c     Si estamos en k=cualquiera y j=1, el damage por CT, por CT y resto de variables deben ser cero
-c     pero tanto el dagno como el damagemenosK deben mantenerse del k anterior, por eso la tomamos de statev(1) 
-c     Para el resto de casos:
-c     damagemenosK debe ser NO reversible, por eso lo debemos guardar de un paso k a otro
-c     se actualiza al pricipio del AMA (j=1) para un paso k cualquiera, pero en el resto de pasos j no cambia
-c     solo pasa de un paso j a otro mediante la statev(13)   
-c     Y el damageT debe permanecer cte dentro de cada j, por eso se toma desde statev(11) que no cambia
-c     pero damageE si se actualiza en cada j, y se hace a traves de statev(11) que se decide al final de la uinter
-C     Por eso se empieza a calcular con el damageE de la iteracion anterior, j-1    
+!cccccccccccccccccccccccccc DAMAGE INITIALIZATION:
+c     If we are at k=1 and j=1, damage and damagemenosK must be zero.               
+c     If we are at any k and j=1, the CT damage, the CT damage and the rest        
+c     of the variables must be zero.                                               
+c     But both damage and damagemenosK must be preserved from the previous         
+c     k, which is why we take them from statev(1).                                 
+c     For the remaining cases:                                                     
+c     damagemenosK must be NON‑reversible, so we must store it from one            
+c     k‑step to the next.                                                          
+c     It is updated at the beginning of the AMA (j=1) for any k‑step, but          
+c     in the remaining j‑steps it does not change.                                 
+c     It only transfers from one j‑step to the next through statev(13).            
+c     And damageT must remain constant within each j, which is why it is           
+c     taken from statev(11), which does not change.                                
+c     But damageE is updated in each j, and this is done through statev(11),       
+c     which is determined at the end of the iteration.                             
+c     That is why the calculation starts using the damageE from the previous       
+c     iteration, j-1.                                                               
+
       IF ((kinc*kstep).eq.1) THEN
           damage=0.00d0 
           damagemenosK=0.00d0
@@ -225,32 +232,38 @@ C     Por eso se empieza a calcular con el damageE de la iteracion anterior, j-1
         damageT=0.00d0 
         damageE=0.00d0
       ELSE         
-        damage=statev(1) ! ==0 desde k=1 y j=1 hasta que cambie
-        damageT=statev(9) ! ==0, desde k=1 y j=1 hasta que cambie
-        damageE=statev(10) ! ==0, desde k=1 y j=1 hasta que cambie
+        damage=statev(1) ! ==0 from k=1 and j=1 until change
+        damageT=statev(9) ! ==0, from k=1 and j=1 until change
+        damageE=statev(10) ! ==0, from k=1 and j=1 until change
         damagemenosK=statev(11)
       ENDIF
-cccccc CALCULO DE LA MATRIZ TANGENTE Y DE LAS TENSIONES 
-c     La UINTER es llamada, como minimo, 2 veces en cada paso j. Esto es j.1 y j.2
-c     algunas veces se llama mas veces si no encuentra convergencia
-c     en j.1, j.2,..., j.n, RDISP(j)= RDISP(j-1)+ DRDISP(j-1), siempre, es decir 
-c     el desplazamiento relativo entre superficies RDISP(j) que convergio en la ultima j 
-c     Sin embargo, en j.1, DRDISP(j)=0, y en j.2,..., j.n, RDISP(j) se actualiza hasta el subpaso n.
-c     por eso todos estos calculos se deben hacer con RDISP(j) a diferencia de la UMAT que debe actualizarse STRAN(j)+DSTRAN(j). 
+cccccc TANGENT STIFFNESS MATRIX CALCULATION 
+c     The UINTER is called at least 2 times in each j‑step. These are j.1 and j.2. 
+c     Sometimes it is called more times if convergence is not achieved.             
+c     In j.1, j.2, ..., j.n, RDISP(j) = RDISP(j‑1) + DRDISP(j‑1), always; that is,  
+c     the relative displacement between surfaces RDISP(j) that converged in the     
+c     previous j.                                                                  
+c     However, in j.1, DRDISP(j) = 0, and in j.2, ..., j.n, RDISP(j) is updated    
+c     up to substep n.                                                             
+c     Therefore, all these calculations must be done using RDISP(j), unlike in     
+c     UMAT where STRAN(j) + DSTRAN(j) must be updated.                             
+                                                                                   
+c     Damage function for normal components depending on the sign of the           
+c     relative displacement RDISP.                                                 
+c     It must be remembered that for UINTER a positive sign indicates contact      
+c     between surfaces.                                                            
 
-c     funcion dagno para normales dependiendo del signo del desplazamiento relativo RDISP
-c     se debe recordar que para la UINTER el signo positivo indica contacto entre superficies
       signoN=SIGN(1.d0,(-RDISP(1)))
       if (signoN.le.0.00d0) then
-      !cuando es compresion siempre hay rigidez normal entre superficies
+      !when in compression there is always normal stiffness
         funN=1.0d0 
       else 
-      !cuando es traccion no hay rigidez normal entre superficies
+      !when in traction there is no normal stiffness between surfaces
         funN=1.0d0-damage 
       end if
-      !no hay nunca rigidez tangencial entre superficies cuando esta dagnado
+      !no tangential stiffness when the spring is damaged
       funT=1.0d0-damage 
-c     Rigideces del resorte dependiendo del dagno. Si esta dagnado es cero.
+c     Spring stiffness in terms of the damage variable
       KnnE=Knn*funN
       KttE1=Ktt1*funT
       KttE2=Ktt2*funT
@@ -270,25 +283,30 @@ C     *****************************************************************
 !          DDSDDR(1,1) = KnnE
 !      ENDIF
 C     *****************************************************************
+c     Update of the interface stiffness matrix.                                     
+c     This matrix is the same within each j, and it depends on the damage           
+c      from j-1                                                                  
+c     It works like the two parts of the AMA: (i) FEM is computed with the          
+c     damage from j‑1 in the first call to UINTER;                                   
+c     in the second call to UINTER, within increment j, the energy is               
+c     minimized with respect to the damage.                                         
+c     It must be noted that the damage, like the rest of the state variables,       
+c     does NOT change within each j;                                                
+c     it only changes at the end of j.                                              
 
-c	Actualizacion de la matriz rigidez de la interfase
-c     Esta matriz es la misma dentro de cada j, y dependera del dagno del j-1.
-c     Es como las dos partes del AMA: i)Se calcula FEM con el dagno j-1 en la primera llamada de la UINTER 
-c     en la segunda llamada de la UINTER, dentro del incremento j, se miniminiza la energia respecto al dagno.
-c     Hay que notar que el dagno, como el resto de variables de estado NO cambia dentro de cada j
-c     solo cambia al final del j
+
       DDSDDR(1,1)=KnnE
       DDSDDR(2,2)=KttE1
       DDSDDR(3,3)=KttE2 
       
-c     Calculo del vector tension:
+c     stress vector calculation:
       DO i=1,3
         STRESS(i)=DDSDDR(i,i)*(RDISP(i))
       ENDDO
       taun=DSQRT(STRESS(2)**2+STRESS(3)**2)
  
-cccccccccccccccccccccccccc CALCULO de energias (tensional y energetica) para todos los nodos de las interfases       
-c     calculo de energia del criterio tensional
+c     COMPUTATION of energies (tensile and energetic) for all nodes of the interfaces.                                                                   
+c     Computation of the energy for the tensile criterion.                          
       IF (RDISP(1)<0.d0) THEN
         GiT=(STRESS(1))**2.d0/(2.d0*Knn)
       ELSE
@@ -296,9 +314,8 @@ c     calculo de energia del criterio tensional
       ENDIF
       GiiT=(STRESS(2))**2.d0/(2.d0*Ktt1)
       GiiiT=(STRESS(3))**2.d0/(2.d0*Ktt2)
-c     calculo de energia del criterio energetico 
-C     en comparacion con la UMAT aqui el RDISP es desplazamiento relativo
-c     al final de la iteraci�n
+c     Computation of the energy for the energetic criterion.                         
+c     RDISP represents the relative displacement at the end of the iteration.                                                  
       IF (RDISP(1)<0.d0) THEN
         GiE=Knn*((RDISP(1))**2.d0)/(2.d0)
       ELSE
@@ -310,8 +327,8 @@ c     al final de la iteraci�n
 cccccc calculo de la energia critica en la primera iteracion para el CT y el CE     
       if (KINC.EQ.1) then
 c     en la UINTER el desplazamiento de despegue es negativo y contacto positivo   
-        psig1=datan2(taun*dsqrt(Knn/Ktt1),ABS(STRESS(1)))
-C        psig2=datan2(STRESS(3)*dsqrt(Knn/Ktt2),-STRESS(1))
+C        psig1=datan2(STRESS(2)*dsqrt(Knn/Ktt1),-STRESS(1))
+        psig1=datan2(ABS(taun),-STRESS(1))
 	  psiGcrit1=pi/(2.d0*(1.d0-lambda1))
 C        psiGcrit2=pi/(2.d0*(1.d0-lambda2))
         !No damage condition !!!!!!REVISAR SI ESTA BIEN
@@ -320,7 +337,7 @@ C        psiGcrit2=pi/(2.d0*(1.d0-lambda2))
         else
         GcT = GIct*(1.d0 + (dtan(psig1*(1.d0-lambda1)))**2.d0)
         endif
-	  GcE=Gct*mu
+	  GcE=GcT*mu
 c     calculo de energia total en la primera iteracion para el CT y ese debe ser el mismo en tomo el AMA
         IF (signoN.GT.0.D0) THEN
             GtotT=GiT+GiiT+GiiiT
@@ -328,11 +345,12 @@ c     calculo de energia total en la primera iteracion para el CT y ese debe ser
             GtotT=GiiT+GiiiT
         ENDIF
       else 
-c     si NO es la primera iteracion se debe tomar las energias criticas y 
-c     la energia total de CT (sustituye al vector tension) de las variables de estado
-c     porque es igual que tomarlo de la primera ITR.
-c     Tened en cuenta que tanto la Gct como GcE deben ser tomadas de la primera ITR
-c     sume a la energia disipada cuando abramos el odb en el script de python
+c     If it is NOT the first iteration, the critical energies and the total SC        
+c     energy (which replaces the stress vector) must be taken from the state         
+c     variables, because this is equivalent to taking them from the first ITR.       
+c     Keep in mind that both Gct and GcE must be taken from the first ITR            
+c     and added to the dissipated energy when we open the ODB in the Python script.  
+
         psig1=statev(3)
         psig2=statev(4)
         GtotT=statev(5)
@@ -360,7 +378,8 @@ C     equivalent traction module:
         sigmaeq=DSQRT(STRESS(1)**2.d0 + ((mu_s**-2.0d0)*taun**2.0d0))
       ENDIF
       
-c     calculo de energia total para cualquier iteracion para el CE con el dagno decidido al final de la ITR anterior	
+c     Computation of the total energy for any iteration for the EC, using the        
+c     damage value determined at the end of the previous iteration.                  
 	IF (signoN.GT.0.D0) THEN
             GtotE=GiE+GiiE+GiiiE
       ELSE
@@ -368,25 +387,26 @@ c     calculo de energia total para cualquier iteracion para el CE con el dagno 
       ENDIF
 
 
-cccccc CALCULO DEL DAGNO DEL CT, CE y DEFINITIVO     
-c     aunque hayamos calculados todas las variables en cada PI, para 
-c     el calculo del CT y CE unicamente se debe contar con los PI NO dagnados en los pasos anteriores
-c     por eso solo nos metemos en el bucle si damagemenosK=0
-      IF (damagemenosK.LE.1d-18) THEN !cumple irreversibilidad
-c     En el primer j, al final de la uinter, se evalua el CT         
-c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo del CT 
-      !si estamos al final en el primer incremento
+c     ***** CALCULATION of SC, EC, and final damage *****                                      
+c     Although all variables are computed in each node, for the calculation            
+c     of SC and EC only the springs that were NOT damaged in previous steps              
+c     must be considered.                                                            
+c     Therefore, we only enter the loop if damagemenosK = 0.                         
+
+      IF (damagemenosK.LE.1d-18) THEN 
+c     Irreversibility condition is satisfied.                                        
+c     In the first j, at the end of the UINTER, the SC is evaluated.                 
+c     And in damageE, only the different initial values are decided                  
+c     depending on the SC, if we are at the end of the first increment.              
       
         ! Estimate when the first increment ends            
-	  IF ((KINC*KSTEP.EQ.KSTEP)) THEN
+	  if ((KINC*KSTEP.EQ.KSTEP)) then
 	      TARGET_TIME = TIME(1) + DTIME
 	      IF ((GtotT.GE.Gct)) THEN !cumple CT
-                damageT=ONE !entonces el nodo esta dagando por CT
+                damageT=ONE 
                 NODNUM = NODNUM + damageT
-	          CALL RANDOM_SEED(NODE)
-!	          CALL RANDOM_NUMBER(randr8)
-	          randnr8 = r8_normal_01( )
 	          ! Store vars in array
+	          randnr8 = r8_normal_01( )
                 IF (NODNUM < MAX_FAILED) THEN
                   FAILED_DATA(NODNUM, 1) = NODNUM
                   FAILED_DATA(NODNUM, 2) = NODE
@@ -394,11 +414,11 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
                   FAILED_DATA(NODNUM, 4:6) = COORDS(1:3)
                   FAILED_DATA(NODNUM, 7) = GtotT
                   FAILED_DATA(NODNUM, 8) = GtotT/Gct
-                  FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
+                  FAILED_DATA(NODNUM, 9) = 1.0d0+(randnr8*prand)
                   tcrand = Gct*FAILED_DATA(NODNUM, 9)
-                  tc = tcrand
-                  if (tcrand.LT.ZERO) tc = 1.0D-4
-                  FAILED_DATA(NODNUM, 10) = GtotT/tc
+
+                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
+                  FAILED_DATA(NODNUM, 10) = GtotT/tcrand
                 ENDIF
 	          
 	          mint2tc=MINVAL(FAILED_DATA(:,10))
@@ -407,20 +427,15 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
 	          mingte2gtc=MINVAL(FAILED_DATA(:, 8))
 	          maxgte2gtc=MAXVAL(FAILED_DATA(:, 8))
 	          deltagt2gc=maxgte2gtc-mingte2gtc
-!	          CALL SORT_FAILED_DATA(FAILED_DATA, NODNUM, 6)
-
-!	          IF (NODNUM.GT.0) THEN
                 
                 IF (GtotT/tcrand.GE.(mint2tc+(ZERO*(deltat2tc)))
-     &          .and.abs(Nini-ONE).le.1d-18) THEN
+     &          .and.(abs(Nini-ONE).le.1d-18))
+     &              THEN
                 damageE=ONE
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, GtotE/tcrand, NINT(damageE)
-!                    WRITE(*,*) int(FAILED_DATA(i,1)), 
-!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
 
                 ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.10d0*(deltat2tc)))
-     &          .and.    abs(Nini-TWO).le.1d-18) THEN
+     &          .and.(abs(Nini-two).le.1d-18))
+     &          THEN
                 damageE=ONE
 !                    if (NODE.EQ.FAILED_DATA(i,2)) then
 !                write(*,*) NODE, t/tc, NINT(damageE)
@@ -475,14 +490,9 @@ c     Y en el damageE, unicamente se decide los difernetes inicios dependiendo d
                 
                 ELSE IF (abs(Nini-eleven).le.1d-18) THEN
                 damageE=ZERO
-!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!                write(*,*) NODE, t/tc, NINT(damageE)
-!                WRITE(*,*) int(FAILED_DATA(i,1)), 
-!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
-!                else
-!                    write(*,*) NODE, t/tc, NINT(damageE)
 
             ENDIF
+C           End of stress condition for jAMA=0 or KINC=1
             IF (control.EQ.1) THEN
                 IF ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18))
      &          THEN
@@ -491,15 +501,14 @@ C     	          WRITE(*,*) KINC, NODE, damage
                 ELSE
                 damage=ZERO
                 ENDIF      
-                !ya se termina el CT y se fija para 
-                !el resto de pasos j con la statev(11)
+
             ENDIF
             
-        ENDIF            
+            ENDIF            
       
 c     al final de cualquier j diferente de 1, se evalua el damageE porque CT ya esta evaluado
  	  ELSE IF (KINC.GT.ONE) THEN
- 	      if ((GtotE.GE.GcE)) then
+            if ((GtotE.GE.GcE)) then
  	          damageE=ONE
  	      else
  	          damageE=ZERO
@@ -511,209 +520,95 @@ c           CC-FFM:
  	      NUM_BROKEN_INC = NUM_BROKEN_INC
  	      NODECC=NODECC+ONE
             KINC_failn(KINC,1)=KINC !
-            IF (control.EQ.0) THEN
-                KINC_failn(KINC,2)=NUM_BROKEN_INC
-            ELSE
-                KINC_failn(KINC,2)=NUM_BROKEN_INC
-            END IF
+            KINC_failn(KINC,2)=NUM_BROKEN_INC
             KINC_failnm1(KINC,1)=KINC
             KINC_failnm1(KINC,2)=NODECC
-            IF (KINC.GT.3) THEN
+            IF (KINC.GE.3) THEN
                 eps0=ABS(KINC_failn(kinc,2)-KINC_failn(kinc-1,2))
-C                WRITE(*, *) 'ALLIE at increment ', KINC, ':', ALLSEv
 C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
                 IF ((eps0.LT.toler).AND.(endflag.EQ.TRUE)) THEN
-!                OPEN(UNIT=30, ACTION='READ',
-!     +          file=TRIM(program_path)//'\'//'eps0_value.txt',
-!     +          STATUS='OLD')
-!                READ(30,*) filesignl
-!                CLOSE(30)
-                
-!                WRITE(*,*) 'ALLSE at increment',KINC,':',
-!     &          ALLWKv, ALLSEv, control
-                WRITE(*,*) damage,KINC_failn(kinc,1),KINC_failn(kinc,2)
+                WRITE(*,*) KINC_failn(kinc,1),INT(KINC_failn(kinc,2))
                 WRITE(*,*)'UINTER: dam0, CONVERGENCE MET; EXIT.'
                 CALL XIT()
                 
-                ELSE IF ((KINC.GT.10).AND.(endflag.EQ.TRUE)) THEN
-                WRITE(*,*) 'UINTER: dam0, MAX. ITER. REACHED:',KINC
-                WRITE(7,*) 'UINTER: dam0, MAX. ITER. REACHED:',KINC,':',
-     &          ALLWKv, ALLSEv
-                CALL XIT()
                 ENDIF
             ENDIF
 C       simultaneous fulfillment of nodal stress- and energy- criterion:            
  	  ELSE IF ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18)) THEN
  	      damage=ONE
-! 	      GcE=Gct*mu
-! 	      NODECC=NODECC+damage
-            !$OMP ATOMIC
             NUM_BROKEN_INC = NUM_BROKEN_INC + 1
             KINC_failn(KINC,1)=KINC !
-            IF (control.EQ.0) THEN
-                KINC_failn(KINC,2)=NUM_BROKEN_INC
-            ELSE
-                KINC_failn(KINC,2)=NUM_BROKEN_INC
-            END IF
-            IF (KINC.GT.3) THEN
+            KINC_failn(KINC,2)=NUM_BROKEN_INC
+            IF (KINC.GE.3) THEN
                 eps0=ABS(KINC_failn(kinc,2)-KINC_failn(kinc-1,2))
 C               KINC_failn(KINC,2).EQ.KINC_failn(KINC-1,2) termination check:
                 IF ((eps0.LT.toler).AND.(endflag.EQ.TRUE)) THEN
-!                WRITE(*,*) 'ALLSE at increment',KINC,':',
-!     &          ALLWKv, ALLSEv, control
-                WRITE(*,*) damage,KINC_failn(kinc,1),KINC_failn(kinc,2)
+                WRITE(*,*) KINC_failn(kinc,1),INT(KINC_failn(kinc,2))
                 WRITE(*,*) 'UINTER: dam1, CONVERGENCE MET; CRACK ONSET.'
                 WRITE(*,*) 
      &          'CONVERGENCE ACHIEVED: No binary delta damage detected.'
                 CALL XIT()
-!                OPEN(UNIT=30, ACTION='READ',
-!     +          file=TRIM(program_path)//'\'//'eps0_value.txt',
-!     +          STATUS='OLD')
-!                READ(30,*) filesignl
-!                CLOSE(30)
                 
-!                IF (filesignl.EQ.ONE) THEN
-!                Ninip = ONE
-                
-!                IF ((GtotT.GE.Gct)) THEN !cumple CT
-!                damageT=ONE !entonces el nodo esta dagando por CT
-!                NODNUM = NODNUM + damageT
-!	          ! Store vars in array
-!	          CALL RANDOM_SEED(NODE)
-!!	          CALL RANDOM_NUMBER(randr8)
-!	          randnr8 = r8_normal_01( )
-!                IF (NODNUM < MAX_FAILED) THEN
-!                  FAILED_DATA(NODNUM, 1) = NODNUM
-!                  FAILED_DATA(NODNUM, 2) = NODE
-!                  FAILED_DATA(NODNUM, 3) = t/tc
-!                  FAILED_DATA(NODNUM, 4:6) = COORDS(1:3)
-!                  FAILED_DATA(NODNUM, 7) = GtotT
-!                  FAILED_DATA(NODNUM, 8) = GtotT/Gct
-!                  FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
-!                  tcrand = Gct*FAILED_DATA(NODNUM, 9)
-!                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
-!                  FAILED_DATA(NODNUM, 10) = GtotT/tcrand
-!                ENDIF
-!	          mint2tc=MINVAL(FAILED_DATA(:,10))
-!	          maxt2tc=MAXVAL(FAILED_DATA(:,10))
-!	          deltat2tc=(maxt2tc-mint2tc)
-!	          mingte2gtc=MINVAL(FAILED_DATA(:, 8))
-!	          maxgte2gtc=MAXVAL(FAILED_DATA(:, 8))
-!	          deltagt2gc=maxgte2gtc-mingte2gtc                
-!                    IF (GtotT/tcrand.GE.(mint2tc+(ZERO*(deltat2tc)))
-!     &              .and.abs(Ninip-ONE).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, GtotE/tcrand, NINT(damageE)
-!!                    WRITE(*,*) int(FAILED_DATA(i,1)), 
-!!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
-!
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.10d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-TWO).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.20d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-three).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.30d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-four).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.40d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-five).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.50d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-six).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.60d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-seven).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.70d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-eight).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.80d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-nine).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (GtotT/tcrand.GE.(mint2tc+(0.90d0*(deltat2tc)))
-!     &          .and.    abs(Ninip-ten).le.1d-18) THEN
-!                damageE=ONE
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!                
-!                ELSE IF (abs(Ninip-eleven).le.1d-18) THEN
-!                damageE=ZERO
-!!                    if (NODE.EQ.FAILED_DATA(i,2)) then
-!!                write(*,*) NODE, t/tc, NINT(damageE)
-!!                WRITE(*,*) int(FAILED_DATA(i,1)), 
-!!     &          int(FAILED_DATA(i,2)), int(damageE), FAILED_DATA(i,3)
-!!                else
-!!                    write(*,*) NODE, t/tc, NINT(damageE)
-!
-!                ENDIF
-                
-!            ENDIF  
+                    if (filesignl.EQ.ONE) then
+                    Ninip = ONE
+                    IF ((GtotT.GE.Gct)) THEN !cumple CT
+                damageT=ONE !entonces el nodo esta dagando por CT
+                NODNUM = NODNUM + damageT
+	          ! Store vars in array
+!	          CALL RANDOM_NUMBER(randr8)
+	          randnr8 = r8_normal_01( )
+                IF (NODNUM < MAX_FAILED) THEN
+                  FAILED_DATA(NODNUM, 1) = NODNUM
+                  FAILED_DATA(NODNUM, 2) = NODE
+                  FAILED_DATA(NODNUM, 3) = t/tc
+                  FAILED_DATA(NODNUM, 4:6) = COORDS(1:3)
+                  FAILED_DATA(NODNUM, 7) = GtotT
+                  FAILED_DATA(NODNUM, 8) = GtotT/Gct
+                  FAILED_DATA(NODNUM, 9) = 1+(randnr8*prand)
+                  tcrand = Gct*FAILED_DATA(NODNUM, 9)
+                  if (tcrand.LT.ZERO) tcrand = 1.0D-4
+                  FAILED_DATA(NODNUM, 10) = GtotT/tcrand
+                ENDIF
+	          
+	          mint2tc=MINVAL(FAILED_DATA(:,10))
+	          maxt2tc=MAXVAL(FAILED_DATA(:,10))
+	          deltat2tc=(maxt2tc-mint2tc)
+	          mingte2gtc=MINVAL(FAILED_DATA(:, 8))
+	          maxgte2gtc=MAXVAL(FAILED_DATA(:, 8))
+	          deltagt2gc=maxgte2gtc-mingte2gtc               
+            ENDIF  
+             
+            IF ((abs(damageT).GT.1d-18).AND.(abs(damageE).GT.1d-18)) 
+     &      THEN
+ 	          damage=ONE
+ 	      ELSE
+ 	          damage=ZERO
+ 	      ENDIF
  	      
-! 	      ELSE
-!                WRITE(*,*)'UINTER: dam1, CONVERGENCE MET; EXIT.'
-!                WRITE(7,*)'UINTER: dam1, CONVERGENCE MET; EXIT.',KINC
-!                CALL XIT()
-!           ENDIF
-
+ 	      else
+ 	              WRITE(*,*)'UINTER: dam1, CONVERGENCE MET; EXIT.'
+ 	              WRITE(7,*)'UINTER: dam1, CONVERGENCE MET; EXIT.',KINC
+                    CALL XIT()
+                    endif
                 KINC_failn(KINC,1)=KINC !
-                IF (control.EQ.0) THEN
-                    KINC_failn(KINC,2)=NUM_BROKEN_INC
-                ELSE
-                    KINC_failn(KINC,2)=NUM_BROKEN_INC
-                END IF
+                KINC_failn(KINC,2)=NUM_BROKEN_INC
                 eps0=ABS(KINC_failn(kinc,2)-KINC_failn(kinc-1,2))
                 
+                ENDIF
             ENDIF
-            
-            ENDIF
-            
-            IF ((KINC.GT.4).AND.(control.EQ.1)) THEN
-                WRITE(*,*) 'UINTER: force control max. iteration, exit.'
-                CALL XIT()
-            ENDIF
+
         ENDIF
         ENDIF !salimos de la evaluacion de damageT y del damageE
 
-        IF ((KINC.GT.3).AND.(all(FAILED_DATA(:,10).EQ.ZERO))) THEN
+        IF ((KINC.GE.3).AND.(all(FAILED_DATA(:,10).EQ.ZERO))) THEN
             ! FAILED_DATA array has not been updated
             WRITE(*,*) 'UINTER: stress cond. array is empty, exit.'
             CALL XIT()
         ENDIF
-             
+    
       !el final del bucle de damagemenosK. Garantiza la irreversibilidad
       ENDIF
 
-C     fuera del bucle que garantiza la irreversibilidad preparamos la energia y energia citica por PI
-c     para calcular despues el funcional de energia en cada N. Para todos los PI de las interfases
-c     esten dagnados o no. Notar que algun PI dagnado puede cambiar de traccion a compresion en algun k
-c     por eso debe hacerse fuera del bucle anterior
-C     ver apuntes de goodnote       
       IF (damage.le.1d-18) THEN
       !se hace cero para que no sume en el funcional de energia
         GcE=0.d0 
@@ -726,13 +621,11 @@ C     ver apuntes de goodnote
       ELSE !si rompe en este paso suma energia a compresion 
            !y energia disipada
         GtotE=GiE*((1.d0-signoN)/2.d0)
-        
       ENDIF
       
 cccccccccccccccccccccccccc END NEW MAR CCCCCCCCCCCCCCCCCCCCCCCCCCCCC     
 c    ***********************************************************************************************************
 c    ***********************************************************************************************************  
-c	
       statev(1)=damage
       statev(2)=node
       statev(3)=psig1
@@ -757,9 +650,8 @@ c
       statev(18)=GiiT
       statev(19)=GiiiT
       statev(20)=RDISP(1)
-      statev(21)=GtotT/tc
+      statev(21)=GtotT/GcT
       statev(22)=tc
-	
 	RETURN
 	END
 C     |||||||||END OF UINTER SUBROUTINE|||||||||
@@ -816,15 +708,10 @@ C     _____________________________________________
          WRITE(*,*) 'Increment ', KINC, ' concluded.'
          WRITE(*,*) 'Total springs broken (D=1):', 
      &              NUM_BROKEN_INC
-
-!         ! TERMINATION LOGIC
-!         IF (NUM_BROKEN_INC .EQ. 0) THEN
-!            WRITE(*,*) 
-!     &      'CONVERGENCE ACHIEVED: No binary damage detected.'
-!            ! To stop Abaqus gracefully from here, we call the error utility
-!            ! with a specific "Exit" code or use a terminal signal.
-!            CALL XIT()
-!         END IF
+         IF ((NUM_BROKEN_INC.EQ.0) .AND. (KINC.GT.2)) THEN
+         WRITE(*,*) 'No springs were broken (D=0): solver exit'
+         CALL XIT()
+         END IF
       END IF
       
       RETURN
