@@ -1,7 +1,7 @@
 # 3DPMTE-SC_Interfaces
-## Abaqus-python, 3D PMTE-SC code, and user interface subroutine for linear elastic (brittle) interfaces.
+## Abaqus-python, 3D PMTE-SC code, with user interface subroutine for linear elastic (brittle) material interfaces.
 
-In the context of Finite Fracture Mechanics, the classical formulation of the coupled criterion for predicting the failure load in a notched or un-notched composite component with, say, a constant thickness $$B$$, assuming the nucleation of a single mode-I crack emanating from the notch root or adhesive front, is given by the next expression:
+In the context of Finite Fracture Mechanics, the classical formulation of the coupled criterion for predicting the failure load in a notched or un-notched composite component with, say, a constant thickness $$B$$, assuming the nucleation of a single mode-I crack emanating from the notch root or adhesive front, is given by the expression:
 
 $$
 \mathbf{
@@ -28,4 +28,4 @@ where the system of two nonlinear equations *must be solved simultaneously for (
   *ENERGY FILE, FREQUENCY=1
   **
 
-5. **"UINTERLEBIM3D_kincxitV2.for"** is the more efficient user subroutine for 3D interfaces, as the convergence termination criteria is given by the (absolute) change of the damage state (i.e., change of broken springs) between the current and previous increments in a given load step: no need to track energy variables with the URDFIL utility routine across iterations, thus eliminating the request for the abaqus .fil file and no reading of energy records, making this routine appropriate for modeling brittle fracture of large scale industrial models.
+5. **"UINTERLEBIM3D_kincxitV2.for"** is the latest and more efficient user subroutine for 3D interfaces, as the convergence termination criteria is given by the (absolute) change of the damage state (i.e., change of broken springs) between the current and previous increments in a given load step: no need to track energy variables with the URDFIL routine across iterations, thus eliminating the request for the abaqus .fil file and reading of energy records, making this routine appropriate for modeling brittle fracture of large scale industrial models.
